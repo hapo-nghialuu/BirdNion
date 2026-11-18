@@ -1605,7 +1605,7 @@ final class NewProviderTests: XCTestCase {
 
     /// `replacingSource: true` on Grok clears inflated multi-day double-count
     /// days (pattern matches Claude revision reset).
-    func testCostHistorySnapshotsBeforeARescanRewritesDays() throws {
+    func testCostHistoryBackupKeepsThePreRescanCopy() throws {
         let dir = FileManager.default.temporaryDirectory
             .appendingPathComponent("birdnion-history-backup-\(UUID().uuidString)", isDirectory: true)
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
@@ -1621,15 +1621,36 @@ final class NewProviderTests: XCTestCase {
             source: .claude, liveDays: [(day, 2.0, 20, [("claude-opus", 2.0, 20)])],
             now: now, url: url, replacingSource: true)
 
-        let snapshots = try FileManager.default.contentsOfDirectory(
-            atPath: CostHistoryStore.backupDirectory(for: url).path).sorted()
-        // First write found no file to copy; the rescan snapshotted the 1.0 day
-        // before overwriting it.
-        XCTAssertEqual(snapshots.count, 1)
-        XCTAssertTrue(snapshots[0].hasSuffix("-rescan.json"))
-        let saved = CostHistoryStore.read(
-            url: CostHistoryStore.backupDirectory(for: url).appendingPathComponent(snapshots[0]))
-        XCTAssertEqual(saved.sources?["claude"]?.values.first?.tokens, 10)
+        // One `.bak` file, holding the state right before the rescan rewrite.
+        let backup = CostHistoryStore.backupURL(for: url)
+        XCTAssertEqual(backup.lastPathComponent, "cost-history.json.bak")
+        XCTAssertEqual(CostHistoryStore.read(url: backup).sources?["claude"]?.values.first?.tokens, 10)
+    }
+
+    func testCostHistoryBackupIsNotOverwrittenByAHistoryThatLostDays() throws {
+        let dir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("birdnion-history-backup-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let url = dir.appendingPathComponent("cost-history.json")
+        let cal = Calendar.current
+        let now = Date()
+        let days = (0..<10).map { cal.date(byAdding: .day, value: -$0, to: cal.startOfDay(for: now))! }
+        _ = CostHistoryStore.apply(
+            source: .claude, liveDays: days.map { ($0, 1.0, 10, [("claude-opus", 1.0, 10)]) },
+            now: now, url: url)
+        CostHistoryStore.backupBeforeWrite(url: url, now: now, beforeRescan: true)
+
+        // The live file loses most of its days (the failure seen in the field).
+        var doc = CostHistoryStore.read(url: url)
+        let keepFrom = CostHistoryStore.dayKey(days[1], calendar: cal)
+        let kept = doc.sources?["claude"]?.filter { $0.key >= keepFrom }
+        doc.sources?["claude"] = kept
+        try CostHistoryStore.write(doc, url: url)
+        CostHistoryStore.backupBeforeWrite(url: url, now: now, beforeRescan: true)
+
+        XCTAssertEqual(CostHistoryStore.read(url: CostHistoryStore.backupURL(for: url))
+            .sources?["claude"]?.count, 10, "the last good backup is kept")
     }
 
     func testGrokCostHistoryReplacingSourceClearsInflatedDays() throws {

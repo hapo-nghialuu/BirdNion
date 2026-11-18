@@ -195,45 +195,43 @@ enum CostHistoryStore {
         return document
     }
 
-    /// Kept history snapshots per store, newest first; older ones are pruned.
-    static let backupRetention = 30
+    /// How often the single `.bak` copy is refreshed while the app writes.
+    static let backupInterval: TimeInterval = 2 * 3_600
 
-    /// `<dir of url>/backups/<file name without extension>/`.
-    static func backupDirectory(for url: URL) -> URL {
-        url.deletingLastPathComponent()
-            .appendingPathComponent("backups", isDirectory: true)
-            .appendingPathComponent(url.deletingPathExtension().lastPathComponent, isDirectory: true)
+    /// `cost-history.json.bak`, next to the history file.
+    static func backupURL(for url: URL) -> URL {
+        url.appendingPathExtension("bak")
     }
 
-    /// Copies the current file into `backupDirectory(for:)` when a rescan is
-    /// about to rewrite days (`reason` set) or no snapshot exists yet for
-    /// today. Best effort: a failed snapshot never blocks the write itself.
-    static func backupBeforeWrite(url: URL, now: Date, reason: String?,
+    /// Refreshes the single `.bak` copy of the history file: right before a
+    /// rescan rewrites days (`beforeRescan`), otherwise at most every
+    /// `backupInterval`. A copy that holds clearly fewer stored days than the
+    /// existing backup is not written, so a history that just lost days never
+    /// overwrites the last good backup. Best effort: never blocks the write.
+    static func backupBeforeWrite(url: URL, now: Date, beforeRescan: Bool,
                                   fileManager: FileManager = .default) {
         guard fileManager.fileExists(atPath: url.path) else { return }
-        let dir = backupDirectory(for: url)
-        let formatter = DateFormatter()
-        formatter.locale = Locale(identifier: "en_US_POSIX")
-        formatter.dateFormat = "yyyyMMdd"
-        let day = formatter.string(from: now)
-        let existing = (try? fileManager.contentsOfDirectory(atPath: dir.path)) ?? []
-        if reason == nil, existing.contains(where: { $0.hasPrefix(day) }) { return }
-        formatter.dateFormat = "yyyyMMdd-HHmmss"
-        let name = "\(formatter.string(from: now))-\(reason ?? "daily").json"
+        let backup = backupURL(for: url)
+        if !beforeRescan,
+           let modified = (try? fileManager.attributesOfItem(atPath: backup.path))?[.modificationDate] as? Date,
+           now.timeIntervalSince(modified) < backupInterval, modified <= now {
+            return
+        }
+        if fileManager.fileExists(atPath: backup.path) {
+            let current = read(url: url).sources ?? [:]
+            let saved = read(url: backup).sources ?? [:]
+            let currentDays = current.values.reduce(0) { $0 + $1.count }
+            let savedDays = saved.values.reduce(0) { $0 + $1.count }
+            // Daily pruning drops at most about one day per source between
+            // refreshes; anything beyond that is lost history.
+            if currentDays + max(saved.count, 1) < savedDays { return }
+        }
         do {
-            try fileManager.createDirectory(at: dir, withIntermediateDirectories: true)
-            let target = dir.appendingPathComponent(name)
-            if !fileManager.fileExists(atPath: target.path) {
-                try fileManager.copyItem(at: url, to: target)
-                try? fileManager.setAttributes([.posixPermissions: 0o600], ofItemAtPath: target.path)
-            }
-            let snapshots = ((try? fileManager.contentsOfDirectory(atPath: dir.path)) ?? [])
-                .filter { $0.hasSuffix(".json") }.sorted(by: >)
-            for old in snapshots.dropFirst(backupRetention) {
-                try? fileManager.removeItem(at: dir.appendingPathComponent(old))
-            }
+            let data = try Data(contentsOf: url)
+            try data.write(to: backup, options: .atomic)
+            try? fileManager.setAttributes([.posixPermissions: 0o600], ofItemAtPath: backup.path)
         } catch {
-            // Snapshot is a safety net only; keep persisting live usage.
+            // The backup is a safety net only; keep persisting live usage.
         }
     }
 
@@ -616,11 +614,11 @@ enum CostHistoryStore {
             updated.topModels = topModels
         }
         do {
-            // Snapshot the file before a rescan rewrites days, and once a day,
-            // so persisted usage can always be restored by hand.
+            // Refresh the `.bak` copy before a rescan rewrites days, and every
+            // two hours, so persisted usage can always be restored by hand.
             backupBeforeWrite(
                 url: url, now: now,
-                reason: replacingSource || overwriteFrom != nil ? "rescan" : nil)
+                beforeRescan: replacingSource || overwriteFrom != nil)
             try write(updated, url: url)
             return ApplyReceipt(window: window, persisted: true)
         } catch {
