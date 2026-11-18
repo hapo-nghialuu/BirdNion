@@ -1055,12 +1055,9 @@ private extension AntigravityProvider {
     }
 
     private func makeQuotaWindow(label: String, quota: AgModelQuota, windowSeconds: Int?) -> QuotaWindow {
-        let subtitle: String?
-        if let resetDate = quota.resetTime {
-            subtitle = "Resets in \(WindowPace.format(max(0, resetDate.timeIntervalSinceNow)))"
-        } else {
-            subtitle = quota.resetDescription
-        }
+        // The row already renders its own countdown from `resetDate`; a
+        // subtitle repeating it showed twice. Keep text only when no date.
+        let subtitle: String? = quota.resetTime == nil ? quota.resetDescription : nil
         return QuotaWindow(
             label: label,
             usedPct: quota.usedPct,
@@ -1150,12 +1147,9 @@ private extension AntigravityProvider {
         windowSeconds: Int?
     ) -> QuotaWindow {
         let remainingPct = Int((max(0, min(1, remainingFraction)) * 100).rounded())
-        let subtitle: String?
-        if let resetDate {
-            subtitle = "Resets in \(WindowPace.format(max(0, resetDate.timeIntervalSinceNow)))"
-        } else {
-            subtitle = resetDescription
-        }
+        // The row already renders its own countdown from `resetDate`; a
+        // subtitle repeating it showed twice. Keep text only when no date.
+        let subtitle: String? = resetDate == nil ? resetDescription : nil
         return QuotaWindow(
             label: label,
             usedPct: 100 - remainingPct,
@@ -1244,6 +1238,14 @@ final class AntigravityProvider: QuotaProvider {
                 }
                 accountMismatch = status
             }
+            // The selected account has its own agy token: its cloud quota is
+            // one fast HTTPS round trip and always answers for that account,
+            // while spawning agy (warm, then isolated) can take 40s+ and still
+            // land on whichever account the shared keychain holds.
+            if Self.activeAccountHasIsolatedLogin(),
+               let cloudStatus = await fetchViaAccountCloudQuota() {
+                return cloudStatus
+            }
             if let status = await fetchViaCLIWarmSession() {
                 if !Self._shouldContinueAfterCandidateForTesting(error: status.error) {
                     return status
@@ -1289,6 +1291,12 @@ final class AntigravityProvider: QuotaProvider {
             }
             return failure("Antigravity: cần IDE đang chạy, agy CLI, hoặc đăng nhập Google")
         }
+    }
+
+    private static func activeAccountHasIsolatedLogin() -> Bool {
+        guard let account = AntigravityOAuthStore.activeAccount(in: AntigravityOAuthStore.load())
+        else { return false }
+        return AntigravityIsolatedAgy.agyRefreshToken(forAccountLabel: account.label) != nil
     }
 
     /// Quota for the SELECTED account straight from Google, bypassing `agy`
@@ -1748,20 +1756,52 @@ enum AntigravityAccountCloudQuota {
         refreshToken: String,
         timeout: TimeInterval = 20
     ) async throws -> [[String: Any]] {
-        let accessToken = try await refreshAccessToken(
-            refreshToken: refreshToken, timeout: timeout)
-        _ = try await post(
-            method: "loadCodeAssist", body: loadCodeAssistBody,
-            accessToken: accessToken, timeout: timeout)
-        let data = try await post(
-            method: "retrieveUserQuotaSummary", body: Data("{}".utf8),
-            accessToken: accessToken, timeout: timeout)
-        return try AgResponseParser.parseQuotaSummary(data).groups
+        // Behave like the real client: mint an access token only when the
+        // cached one is about to expire (~hourly), and run `loadCodeAssist`
+        // once per fresh token, so a routine poll is a single quota request.
+        let session: SessionCache.Session
+        if let cached = await SessionCache.shared.session(for: refreshToken) {
+            session = cached
+        } else {
+            let minted = try await refreshAccessToken(refreshToken: refreshToken, timeout: timeout)
+            _ = try await post(
+                method: "loadCodeAssist", body: loadCodeAssistBody,
+                accessToken: minted.token, timeout: timeout)
+            session = SessionCache.Session(token: minted.token, expiresAt: minted.expiresAt)
+            await SessionCache.shared.store(session, for: refreshToken)
+        }
+        do {
+            let data = try await post(
+                method: "retrieveUserQuotaSummary", body: Data("{}".utf8),
+                accessToken: session.token, timeout: timeout)
+            return try AgResponseParser.parseQuotaSummary(data).groups
+        } catch {
+            // A rejected token is dropped so the next poll mints a new one;
+            // no immediate retry, which would only add requests.
+            await SessionCache.shared.forget(refreshToken)
+            throw error
+        }
+    }
+
+    /// Access tokens per refresh token, in memory only (never persisted).
+    actor SessionCache {
+        struct Session { let token: String; let expiresAt: Date }
+        static let shared = SessionCache()
+        private var sessions: [String: Session] = [:]
+
+        /// A token with less than 5 minutes left is treated as expired.
+        func session(for refreshToken: String, now: Date = Date()) -> Session? {
+            guard let session = sessions[refreshToken],
+                  session.expiresAt.timeIntervalSince(now) > 300 else { return nil }
+            return session
+        }
+        func store(_ session: Session, for refreshToken: String) { sessions[refreshToken] = session }
+        func forget(_ refreshToken: String) { sessions[refreshToken] = nil }
     }
 
     private static func refreshAccessToken(
         refreshToken: String, timeout: TimeInterval
-    ) async throws -> String {
+    ) async throws -> (token: String, expiresAt: Date) {
         var req = URLRequest(url: tokenURL)
         req.httpMethod = "POST"
         req.timeoutInterval = timeout
@@ -1783,7 +1823,9 @@ enum AntigravityAccountCloudQuota {
             throw AntigravityProviderError.apiError(
                 "Antigravity: không làm mới được token agy (HTTP \(code))")
         }
-        return token
+        // Google access tokens last an hour; assume that when unstated.
+        let lifetime = (json["expires_in"] as? NSNumber)?.doubleValue ?? 3_600
+        return (token, Date().addingTimeInterval(lifetime))
     }
 
     private static func post(

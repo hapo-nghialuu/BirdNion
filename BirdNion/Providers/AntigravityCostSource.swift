@@ -17,7 +17,7 @@ enum AntigravityCostSource {
     static let descriptor = LocalCostSource(
         source: .antigravity,
         displayName: "Antigravity",
-        countingRevision: 2,
+        countingRevision: 3,
         roots: { AntigravityCostSource.dataRoots() },
         turnReader: { roots, cutoff in
             AntigravityCostSource.turns(roots: roots, cutoff: cutoff)
@@ -28,6 +28,7 @@ enum AntigravityCostSource {
         let candidates = [
             home.appendingPathComponent(".gemini/antigravity-cli/conversations"),
             home.appendingPathComponent(".gemini/antigravity/conversations"),
+            home.appendingPathComponent(".gemini/antigravity-ide/conversations"),
             home.appendingPathComponent(".config/tokscale/antigravity-cache/sessions"),
         ]
         return candidates.filter { FileManager.default.fileExists(atPath: $0.path) }
@@ -43,10 +44,12 @@ enum AntigravityCostSource {
 
     private static func turns(database url: URL, cutoff: Date) -> [LocalTurnRecord] {
         let session = url.deletingPathExtension().lastPathComponent
-        guard let rows = readRows(database: url) else { return [] }
-        return rows.compactMap { row in
+        guard let read = readRows(database: url) else { return [] }
+        let stepTimes = read.stepTimes
+        return read.rows.compactMap { row in
             guard let turn = AntigravityTurnDecoder.parseTurn(row.data),
-                  let usage = turn.usage, let timestampMs = turn.timestampMs
+                  let usage = turn.usage,
+                  let timestampMs = turn.timestampMs ?? turn.stepID.flatMap({ stepTimes[$0] })
             else { return nil }
             let date = Date(timeIntervalSince1970: Double(timestampMs) / 1000)
             guard date >= cutoff else { return nil }
@@ -85,26 +88,32 @@ enum AntigravityCostSource {
         let data: [UInt8]
     }
 
-    /// Opens read-only; retries through `?immutable=1` when the WAL sidecars
-    /// are absent (same fallback as the OpenCode source). Returns nil when
-    /// the database can't be opened or has no `gen_metadata` table.
-    private static func readRows(database url: URL) -> [DBRow]? {
+    /// Opens read-only, then through `?immutable=1`. A WAL-mode database
+    /// opened read-only without its `-shm` sidecar opens fine but fails on the
+    /// first read, so the fallback is taken whenever the first pass reads
+    /// nothing, not only when opening fails. Returns nil when neither pass
+    /// finds a `gen_metadata` table.
+    private static func readRows(database url: URL) -> (rows: [DBRow], stepTimes: [String: Int64])? {
+        if let read = readRows(database: url, immutable: false) { return read }
+        return readRows(database: url, immutable: true)
+    }
+
+    private static func readRows(database url: URL, immutable: Bool) -> (rows: [DBRow], stepTimes: [String: Int64])? {
         var handle: OpaquePointer?
-        if sqlite3_open_v2(url.path, &handle, SQLITE_OPEN_READONLY, nil) != SQLITE_OK {
-            if handle != nil { sqlite3_close(handle) }
-            handle = nil
+        let opened: Bool
+        if immutable {
             var allowed = CharacterSet.urlPathAllowed
             allowed.remove(charactersIn: "%?#")
-            guard let path = url.path.addingPercentEncoding(withAllowedCharacters: allowed),
-                  sqlite3_open_v2(
-                    "file:\(path)?immutable=1",
-                    &handle, SQLITE_OPEN_READONLY | SQLITE_OPEN_URI, nil) == SQLITE_OK
-            else {
-                if handle != nil { sqlite3_close(handle) }
-                return nil
-            }
+            guard let path = url.path.addingPercentEncoding(withAllowedCharacters: allowed) else { return nil }
+            opened = sqlite3_open_v2(
+                "file:\(path)?immutable=1", &handle, SQLITE_OPEN_READONLY | SQLITE_OPEN_URI, nil) == SQLITE_OK
+        } else {
+            opened = sqlite3_open_v2(url.path, &handle, SQLITE_OPEN_READONLY, nil) == SQLITE_OK
         }
-        guard let database = handle else { return nil }
+        guard opened, let database = handle else {
+            if handle != nil { sqlite3_close(handle) }
+            return nil
+        }
         defer { sqlite3_close(database) }
 
         var hasTable = false
@@ -137,7 +146,32 @@ enum AntigravityCostSource {
                 idx: sqlite3_column_int64(statement, 0),
                 data: Array(UnsafeBufferPointer(start: blob.assumingMemoryBound(to: UInt8.self), count: count))))
         }
-        return rows
+        return (rows, stepTimes(database: database))
+    }
+
+    /// Earliest `steps` time per generation step id. Missing table or rows
+    /// just mean no fallback times.
+    private static func stepTimes(database: OpaquePointer) -> [String: Int64] {
+        var statement: OpaquePointer?
+        guard sqlite3_prepare_v2(
+            database,
+            "SELECT metadata FROM main.steps WHERE metadata IS NOT NULL",
+            -1, &statement, nil) == SQLITE_OK
+        else { return [:] }
+        defer { sqlite3_finalize(statement) }
+        var times: [String: Int64] = [:]
+        while sqlite3_step(statement) == SQLITE_ROW {
+            guard sqlite3_column_type(statement, 0) == SQLITE_BLOB,
+                  let blob = sqlite3_column_blob(statement, 0)
+            else { continue }
+            let count = Int(sqlite3_column_bytes(statement, 0))
+            guard count > 0,
+                  let step = AntigravityTurnDecoder.parseStepTime(
+                      Array(UnsafeBufferPointer(start: blob.assumingMemoryBound(to: UInt8.self), count: count)))
+            else { continue }
+            times[step.id] = min(times[step.id] ?? .max, step.timestampMs)
+        }
+        return times
     }
 }
 
@@ -160,6 +194,8 @@ struct AntigravityTurnDecoder {
         var usage: ParsedUsage?
         var timestampMs: Int64?
         var model: String?
+        /// Root field 4: the id `steps.metadata` field 12 refers back to.
+        var stepID: String?
     }
 
     private struct Reader {
@@ -247,6 +283,8 @@ struct AntigravityTurnDecoder {
                 if let chat = message(wire, data) {
                     parseChat(chat, turn: &turn, seconds: &seconds, nanos: &nanos)
                 }
+            case 4:
+                turn.stepID = string(wire, data)
             default:
                 break
             }
@@ -256,6 +294,29 @@ struct AntigravityTurnDecoder {
             turn.timestampMs = Int64(seconds) * 1000 + Int64(nanos) / 1_000_000
         }
         return turn
+    }
+
+    /// `steps.metadata`: {1: created {1: sec, 2: ns}, 12: generation step id}.
+    /// Newer Antigravity builds stopped writing a timestamp into the
+    /// generation record itself, so this is where a turn's time comes from.
+    static func parseStepTime(_ bytes: [UInt8]) -> (id: String, timestampMs: Int64)? {
+        var id: String?
+        var seconds: UInt64?
+        var nanos: UInt64 = 0
+        let valid = eachField(bytes[...]) { number, wire, data, _ in
+            switch number {
+            case 1:
+                if let created = message(wire, data) {
+                    parseTimestamp(created, seconds: &seconds, nanos: &nanos)
+                }
+            case 12:
+                id = string(wire, data)
+            default:
+                break
+            }
+        }
+        guard valid, let id, !id.isEmpty, let seconds, seconds > 0 else { return nil }
+        return (id, Int64(seconds) * 1000 + Int64(nanos) / 1_000_000)
     }
 
     private static func parseChat(
