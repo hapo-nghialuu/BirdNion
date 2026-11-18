@@ -321,9 +321,27 @@ enum ClaudeCLIAccountStore {
            let decoded = try? JSONDecoder().decode([ClaudeCLIAccount].self, from: data) {
             managed = decoded.filter { !$0.isSystem }
         }
+        let configIdentity = cachedSystemAccount == nil ? systemConfigIdentity() : nil
         let system = cachedSystemAccount ?? ClaudeCLIAccount(
-            id: systemID, email: nil, orgName: nil, subscriptionType: nil, loggedIn: true)
+            id: systemID, email: configIdentity?.email, orgName: configIdentity?.orgName,
+            subscriptionType: nil, loggedIn: true)
         return [system] + managed
+    }
+
+    /// The account the default `~/.claude` login last belonged to, read from
+    /// `~/.claude.json`. Claude Code keeps this record after its token is
+    /// cleared, so a signed-out system account can still be named.
+    static func systemConfigIdentity(
+        home: URL = URL(fileURLWithPath: NSHomeDirectory())
+    ) -> (email: String, orgName: String?)? {
+        guard let data = try? Data(contentsOf: home.appendingPathComponent(".claude.json")),
+              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let account = json["oauthAccount"] as? [String: Any],
+              let email = (account["emailAddress"] as? String)?
+                .trimmingCharacters(in: .whitespacesAndNewlines),
+              !email.isEmpty
+        else { return nil }
+        return (email, account["organizationName"] as? String)
     }
 
     private static var cachedSystemAccount: ClaudeCLIAccount?
@@ -432,6 +450,10 @@ enum ClaudeCLIAccountStore {
                     account.email = status.email ?? account.email
                     account.orgName = status.orgName ?? account.orgName
                     account.subscriptionType = status.subscriptionType ?? account.subscriptionType
+                } else if account.isSystem, account.email == nil,
+                          let identity = systemConfigIdentity() {
+                    account.email = identity.email
+                    account.orgName = identity.orgName ?? account.orgName
                 }
             }
             updated.append(account)
@@ -457,17 +479,23 @@ enum ClaudeCLIAccountStore {
     /// Opens Terminal on a throwaway `.command` script that runs
     /// `claude auth login` against the account's config dir. A `.command`
     /// file opens in Terminal without needing Automation permission.
+    /// The system account logs in against the default `~/.claude` login, so
+    /// its script clears `CLAUDE_CONFIG_DIR` instead of setting it.
     static func openLoginInTerminal(id: String) throws {
-        guard let dir = configDir(for: id) else { return }
+        let dir = configDir(for: id)
         let binary = ClaudeCLIResolver.resolvedBinaryPath() ?? "claude"
+        let configLine = dir.map { "export CLAUDE_CONFIG_DIR=\(shellQuoted($0))" }
+            ?? "unset CLAUDE_CONFIG_DIR"
         let script = """
         #!/bin/zsh
-        export CLAUDE_CONFIG_DIR=\(shellQuoted(dir))
+        \(configLine)
         \(shellQuoted(binary)) auth login
         echo
         echo "BirdNion: login xong — quay lại BirdNion, có thể đóng cửa sổ này."
         """
-        let url = URL(fileURLWithPath: dir).appendingPathComponent("birdnion-login.command")
+        let scriptDir = dir.map { URL(fileURLWithPath: $0, isDirectory: true) } ?? baseURL()
+        try FileManager.default.createDirectory(at: scriptDir, withIntermediateDirectories: true)
+        let url = scriptDir.appendingPathComponent("birdnion-login.command")
         try Data(script.utf8).write(to: url, options: .atomic)
         try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: url.path)
         NSWorkspace.shared.open(url)

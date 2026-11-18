@@ -1010,6 +1010,40 @@ final class ClaudeNativeTests: XCTestCase {
         XCTAssertEqual(report?.todayTokens, 150)
         XCTAssertEqual(report?.last30Tokens, 150)
     }
+
+    // MARK: - Signed-out system account identity
+
+    private func homeWithClaudeJSON(_ object: [String: Any]?) throws -> URL {
+        let home = FileManager.default.temporaryDirectory
+            .appendingPathComponent("birdnion-claude-home-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: home, withIntermediateDirectories: true)
+        if let object {
+            try JSONSerialization.data(withJSONObject: object)
+                .write(to: home.appendingPathComponent(".claude.json"))
+        }
+        return home
+    }
+
+    func testSystemIdentityIsReadFromClaudeJSONAfterSignOut() throws {
+        let home = try homeWithClaudeJSON([
+            "oauthAccount": ["emailAddress": "dev@example.com", "organizationName": "Example"],
+        ])
+        defer { try? FileManager.default.removeItem(at: home) }
+        let identity = try XCTUnwrap(ClaudeCLIAccountStore.systemConfigIdentity(home: home))
+        XCTAssertEqual(identity.email, "dev@example.com")
+        XCTAssertEqual(identity.orgName, "Example")
+    }
+
+    func testSystemIdentityIsNilWithoutAnAccountRecord() throws {
+        let missing = try homeWithClaudeJSON(nil)
+        let empty = try homeWithClaudeJSON(["oauthAccount": ["emailAddress": "  "]])
+        defer {
+            try? FileManager.default.removeItem(at: missing)
+            try? FileManager.default.removeItem(at: empty)
+        }
+        XCTAssertNil(ClaudeCLIAccountStore.systemConfigIdentity(home: missing))
+        XCTAssertNil(ClaudeCLIAccountStore.systemConfigIdentity(home: empty))
+    }
 }
 
 private final class ClaudeWebURLProtocol: URLProtocol {
