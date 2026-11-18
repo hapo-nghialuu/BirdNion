@@ -2496,7 +2496,7 @@ final class ClaudeAccountMenuModel: ObservableObject {
             waitingLoginID = nil
             if !loggedIn {
                 await discardIfEmpty(id)
-            } else if isDuplicate(id) {
+            } else if id != ClaudeCLIAccountStore.systemID, isDuplicate(id) {
                 try? await ClaudeCLIAccountStore.removeManagedAccount(id)
                 message = .duplicate
                 reload()
@@ -2545,9 +2545,11 @@ final class ClaudeAccountMenuModel: ObservableObject {
             return AccountMenuEntry(
                 id: account.id, title: title, subtitle: subtitle,
                 isDefault: account.isSystem, isActive: account.id == activeID,
-                needsLogin: !account.loggedIn && !account.isSystem,
+                needsLogin: !account.loggedIn,
                 canRemove: !account.isSystem,
-                quotaRemaining: lastKnownRemaining(.claude, accountID: account.id))
+                // A signed-out account's last snapshot is stale; don't show it as current.
+                quotaRemaining: account.loggedIn
+                    ? lastKnownRemaining(.claude, accountID: account.id) : nil)
         }
     }
 }
