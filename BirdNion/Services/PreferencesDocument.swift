@@ -72,6 +72,7 @@ struct PreferencesDocument: Codable {
         "kiroBudgetUSD",
         "ompBudgetUSD",
         "piBudgetUSD",
+        "antigravityBudgetUSD",
     ]
 
     /// Free-form string keys (bounded length; no secrets — cookie headers,
