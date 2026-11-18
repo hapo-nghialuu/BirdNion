@@ -195,6 +195,48 @@ enum CostHistoryStore {
         return document
     }
 
+    /// Kept history snapshots per store, newest first; older ones are pruned.
+    static let backupRetention = 30
+
+    /// `<dir of url>/backups/<file name without extension>/`.
+    static func backupDirectory(for url: URL) -> URL {
+        url.deletingLastPathComponent()
+            .appendingPathComponent("backups", isDirectory: true)
+            .appendingPathComponent(url.deletingPathExtension().lastPathComponent, isDirectory: true)
+    }
+
+    /// Copies the current file into `backupDirectory(for:)` when a rescan is
+    /// about to rewrite days (`reason` set) or no snapshot exists yet for
+    /// today. Best effort: a failed snapshot never blocks the write itself.
+    static func backupBeforeWrite(url: URL, now: Date, reason: String?,
+                                  fileManager: FileManager = .default) {
+        guard fileManager.fileExists(atPath: url.path) else { return }
+        let dir = backupDirectory(for: url)
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.dateFormat = "yyyyMMdd"
+        let day = formatter.string(from: now)
+        let existing = (try? fileManager.contentsOfDirectory(atPath: dir.path)) ?? []
+        if reason == nil, existing.contains(where: { $0.hasPrefix(day) }) { return }
+        formatter.dateFormat = "yyyyMMdd-HHmmss"
+        let name = "\(formatter.string(from: now))-\(reason ?? "daily").json"
+        do {
+            try fileManager.createDirectory(at: dir, withIntermediateDirectories: true)
+            let target = dir.appendingPathComponent(name)
+            if !fileManager.fileExists(atPath: target.path) {
+                try fileManager.copyItem(at: url, to: target)
+                try? fileManager.setAttributes([.posixPermissions: 0o600], ofItemAtPath: target.path)
+            }
+            let snapshots = ((try? fileManager.contentsOfDirectory(atPath: dir.path)) ?? [])
+                .filter { $0.hasSuffix(".json") }.sorted(by: >)
+            for old in snapshots.dropFirst(backupRetention) {
+                try? fileManager.removeItem(at: dir.appendingPathComponent(old))
+            }
+        } catch {
+            // Snapshot is a safety net only; keep persisting live usage.
+        }
+    }
+
     static func write(_ doc: Document, url: URL = historyURL()) throws {
         guard validateDocument(doc) else { throw ValidationError.invalidDocument }
         _ = try mutationPathExistsAsRegularFile(url)
@@ -357,10 +399,13 @@ enum CostHistoryStore {
     /// Merge live day buckets into the document for one source. Returns the
     /// updated document and the contiguous daily series for the UI window.
     ///
-    /// When `replacingSource` is true, ignore previously stored days for that
-    /// source and write only the live set (atomic wipe+replace in one write
-    /// via `apply`). Used after a counting/pricing revision so high-water
-    /// cannot keep inflated pre-fix totals.
+    /// When `replacingSource` is true, every live day overwrites its stored
+    /// day instead of keeping the higher of the two. Used after a
+    /// counting/pricing revision so high-water cannot keep inflated pre-fix
+    /// totals. `overwriteFrom` does the same for live days on or after that
+    /// day only (a rescan that stopped early is exact only for its newest
+    /// days). Stored days the live scan did not report are never removed:
+    /// their session logs may be gone, and the history is the only record.
     static func merge(
         document: Document,
         source: Source,
@@ -369,10 +414,14 @@ enum CostHistoryStore {
         calendar: Calendar = .current,
         windowDays: Int = 90,
         retainDays: Int = retainDays,
-        replacingSource: Bool = false) -> (document: Document, window: [DayBucket])
+        replacingSource: Bool = false,
+        overwriteFrom: Date? = nil) -> (document: Document, window: [DayBucket])
     {
         var sources = document.sources ?? [:]
-        var byDay: [String: Day] = replacingSource ? [:] : (sources[source.rawValue] ?? [:])
+        var byDay: [String: Day] = sources[source.rawValue] ?? [:]
+        let overwriteStart: Date? = replacingSource
+            ? .distantPast
+            : overwriteFrom.map { calendar.startOfDay(for: $0) }
 
         for live in liveDays {
             let key = dayKey(live.date, calendar: calendar)
@@ -380,7 +429,8 @@ enum CostHistoryStore {
                 usd: live.usd,
                 tokens: live.tokens,
                 models: live.models.map { Model(name: $0.name, usd: $0.usd, tokens: $0.tokens) })
-            if !replacingSource, let existing = byDay[key] {
+            let overwrites = overwriteStart.map { live.date >= $0 } ?? false
+            if !overwrites, let existing = byDay[key] {
                 byDay[key] = preferHigher(existing, incoming)
             } else if incoming.tokens > 0 || incoming.usd > 0 {
                 byDay[key] = incoming
@@ -490,6 +540,7 @@ enum CostHistoryStore {
         windowDays: Int = 90,
         url: URL = historyURL(),
         replacingSource: Bool = false,
+        overwriteFrom: Date? = nil,
         liveScanSucceeded: Bool = false,
         updateTopModel: Bool = false,
         topModel: String? = nil,
@@ -527,7 +578,8 @@ enum CostHistoryStore {
             now: now,
             calendar: calendar,
             windowDays: windowDays,
-            replacingSource: replacingSource)
+            replacingSource: replacingSource,
+            overwriteFrom: overwriteFrom)
         if liveScanSucceeded {
             var scannedAt = updated.scannedAt ?? [:]
             scannedAt[source.rawValue] = Int64(
@@ -564,6 +616,11 @@ enum CostHistoryStore {
             updated.topModels = topModels
         }
         do {
+            // Snapshot the file before a rescan rewrites days, and once a day,
+            // so persisted usage can always be restored by hand.
+            backupBeforeWrite(
+                url: url, now: now,
+                reason: replacingSource || overwriteFrom != nil ? "rescan" : nil)
             try write(updated, url: url)
             return ApplyReceipt(window: window, persisted: true)
         } catch {

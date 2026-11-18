@@ -1044,6 +1044,103 @@ final class ClaudeNativeTests: XCTestCase {
         XCTAssertNil(ClaudeCLIAccountStore.systemConfigIdentity(home: missing))
         XCTAssertNil(ClaudeCLIAccountStore.systemConfigIdentity(home: empty))
     }
+
+    // MARK: - Claude cost roots
+
+    func testInheritedConfigDirAddsToEveryAccountRootInsteadOfReplacingThem() throws {
+        let fm = FileManager.default
+        let base = fm.temporaryDirectory.appendingPathComponent("birdnion-roots-\(UUID().uuidString)")
+        let managed = base.appendingPathComponent("claude-accounts")
+        try fm.createDirectory(at: managed.appendingPathComponent("acct-a"), withIntermediateDirectories: true)
+        try fm.createDirectory(at: managed.appendingPathComponent("acct-b"), withIntermediateDirectories: true)
+        defer { try? fm.removeItem(at: base) }
+        let home = base.appendingPathComponent("home").path
+        try fm.createDirectory(
+            atPath: home + "/Library/Application Support/orca/claude-profiles/p1/home",
+            withIntermediateDirectories: true)
+
+        // A host-exported dir (Orca) plus one that is already a managed account.
+        let roots = ClaudeCostScanner.defaultProjectsRoots(
+            environment: [
+                "HOME": home,
+                "CLAUDE_CONFIG_DIR": "/orca/profile,\(managed.appendingPathComponent("acct-a").path)",
+            ],
+            managedAccountsDir: managed).map(\.path)
+
+        XCTAssertTrue(roots.contains("/orca/profile/projects"))
+        XCTAssertTrue(roots.contains(home + "/.claude/projects"))
+        XCTAssertTrue(roots.contains { $0.hasSuffix("/orca/claude-profiles/p1/home/projects") })
+        // The temp dir resolves through /private, so match the account tail.
+        XCTAssertEqual(roots.filter { $0.hasSuffix("/acct-b/projects") }.count, 1)
+        XCTAssertEqual(roots.filter { $0.hasSuffix("/acct-a/projects") }.count, 1,
+                       "each dir is scanned once")
+    }
+
+    // MARK: - Shell wrapper upgrade
+
+    private let legacyWrapper = """
+        # >>> BirdNion Claude account >>>
+        claude() {
+          local d; d="$(cat "$HOME/.config/birdnion/claude-active-dir" 2>/dev/null)"
+          if [ -n "$d" ]; then CLAUDE_CONFIG_DIR="$d" command claude "$@"; else command claude "$@"; fi
+        }
+        # <<< BirdNion Claude account <<<
+        """
+
+    func testShellWrapperUpgradeReplacesOnlyTheBirdNionBlock() throws {
+        let dir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("birdnion-zshrc-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let target = dir.appendingPathComponent("dotfiles-zshrc")
+        let link = dir.appendingPathComponent(".zshrc")
+        try "export A=1\n\(legacyWrapper)\nexport B=2\n".write(to: target, atomically: true, encoding: .utf8)
+        try FileManager.default.createSymbolicLink(at: link, withDestinationURL: target)
+
+        XCTAssertTrue(try ClaudeCLIAccountStore.upgradeShellWrapperIfNeeded(url: link))
+        let text = try String(contentsOf: target, encoding: .utf8)
+        XCTAssertEqual(text, "export A=1\n\(ClaudeCLIAccountStore.shellSnippet)\nexport B=2\n")
+        XCTAssertTrue(text.contains("env -u CLAUDE_CONFIG_DIR claude"))
+        // Still a symlink into the dotfiles target.
+        XCTAssertEqual(
+            try FileManager.default.destinationOfSymbolicLink(atPath: link.path), target.path)
+        // Already current: nothing to rewrite.
+        XCTAssertFalse(try ClaudeCLIAccountStore.upgradeShellWrapperIfNeeded(url: link))
+    }
+
+    func testShellWrapperCoversEveryShellSetUpOnTheMac() throws {
+        let home = FileManager.default.temporaryDirectory
+            .appendingPathComponent("birdnion-home-\(UUID().uuidString)", isDirectory: true)
+        let fm = FileManager.default
+        try fm.createDirectory(at: home.appendingPathComponent(".config/fish"),
+                               withIntermediateDirectories: true)
+        defer { try? fm.removeItem(at: home) }
+        try "export PATH=x\n".write(to: home.appendingPathComponent(".bash_profile"),
+                                     atomically: true, encoding: .utf8)
+
+        let targets = ClaudeCLIAccountStore.shellRCTargets(home: home)
+        try ClaudeCLIAccountStore.installShellWrapper(targets: targets)
+        // A second pass is a no-op: one block per file.
+        try ClaudeCLIAccountStore.installShellWrapper(targets: targets)
+
+        func text(_ path: String) -> String? {
+            try? String(contentsOf: home.appendingPathComponent(path), encoding: .utf8)
+        }
+        XCTAssertEqual(text(".zshrc")?.components(separatedBy: ClaudeCLIAccountStore.shellRCMarker).count, 2)
+        XCTAssertTrue(text(".bash_profile")?.hasPrefix("export PATH=x\n") == true)
+        XCTAssertTrue(text(".bash_profile")?.contains("env -u CLAUDE_CONFIG_DIR claude") == true)
+        XCTAssertNil(text(".bashrc"), "a shell file that does not exist is not created")
+        XCTAssertTrue(text(".config/fish/conf.d/birdnion-claude.fish")?.contains("function claude") == true)
+    }
+
+    func testShellWrapperUpgradeIgnoresFilesWithoutTheBlock() throws {
+        let file = FileManager.default.temporaryDirectory
+            .appendingPathComponent("birdnion-zshrc-\(UUID().uuidString)")
+        try "export A=1\n".write(to: file, atomically: true, encoding: .utf8)
+        defer { try? FileManager.default.removeItem(at: file) }
+        XCTAssertFalse(try ClaudeCLIAccountStore.upgradeShellWrapperIfNeeded(url: file))
+        XCTAssertEqual(try String(contentsOf: file, encoding: .utf8), "export A=1\n")
+    }
 }
 
 private final class ClaudeWebURLProtocol: URLProtocol {

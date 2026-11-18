@@ -1052,14 +1052,14 @@ final class NewProviderTests: XCTestCase {
         // Lower live totals win (not preferHigher's 1000).
         XCTAssertEqual(window.last?.tokens ?? -1, 100)
         XCTAssertEqual(window.last?.usd ?? -1, 1.0, accuracy: 0.001)
-        // Day absent from live is gone (not kept as high-water).
-        XCTAssertEqual(window[window.count - 2].tokens, 0)
-        XCTAssertEqual(window[window.count - 2].usd, 0, accuracy: 0.001)
+        // A day the live scan did not report is kept: its session logs may be
+        // gone, and the stored history is then the only record of it.
+        XCTAssertEqual(window[window.count - 2].tokens, 1000)
+        XCTAssertEqual(window[window.count - 2].usd, 10.0, accuracy: 0.001)
 
-        // Disk matches: only today under claude; other sources untouched.
         let stored = CostHistoryStore.read(url: url).sources?["claude"] ?? [:]
         XCTAssertEqual(stored[CostHistoryStore.dayKey(today, calendar: cal)]?.tokens, 100)
-        XCTAssertNil(stored[CostHistoryStore.dayKey(yesterday, calendar: cal)])
+        XCTAssertEqual(stored[CostHistoryStore.dayKey(yesterday, calendar: cal)]?.tokens, 1000)
     }
 
     /// Read-only `window()` must return the same buckets `apply` produced,
@@ -1605,6 +1605,33 @@ final class NewProviderTests: XCTestCase {
 
     /// `replacingSource: true` on Grok clears inflated multi-day double-count
     /// days (pattern matches Claude revision reset).
+    func testCostHistorySnapshotsBeforeARescanRewritesDays() throws {
+        let dir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("birdnion-history-backup-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let url = dir.appendingPathComponent("cost-history.json")
+        let now = Date()
+        let day = Calendar.current.startOfDay(for: now)
+
+        _ = CostHistoryStore.apply(
+            source: .claude, liveDays: [(day, 1.0, 10, [("claude-opus", 1.0, 10)])],
+            now: now, url: url)
+        _ = CostHistoryStore.apply(
+            source: .claude, liveDays: [(day, 2.0, 20, [("claude-opus", 2.0, 20)])],
+            now: now, url: url, replacingSource: true)
+
+        let snapshots = try FileManager.default.contentsOfDirectory(
+            atPath: CostHistoryStore.backupDirectory(for: url).path).sorted()
+        // First write found no file to copy; the rescan snapshotted the 1.0 day
+        // before overwriting it.
+        XCTAssertEqual(snapshots.count, 1)
+        XCTAssertTrue(snapshots[0].hasSuffix("-rescan.json"))
+        let saved = CostHistoryStore.read(
+            url: CostHistoryStore.backupDirectory(for: url).appendingPathComponent(snapshots[0]))
+        XCTAssertEqual(saved.sources?["claude"]?.values.first?.tokens, 10)
+    }
+
     func testGrokCostHistoryReplacingSourceClearsInflatedDays() throws {
         let fm = FileManager.default
         let dir = fm.temporaryDirectory.appendingPathComponent(UUID().uuidString)
@@ -1636,11 +1663,13 @@ final class NewProviderTests: XCTestCase {
             replacingSource: true)
 
         XCTAssertEqual(window.last?.tokens ?? -1, 2_570_000)
-        XCTAssertEqual(window[window.count - 2].tokens, 0)
+        // Replacing overwrites reported days only; a stored day the scan did
+        // not report is never deleted, even when it was an inflated one.
+        XCTAssertEqual(window[window.count - 2].tokens, 2_570_000)
 
         let stored = CostHistoryStore.read(url: url).sources?["grok"] ?? [:]
         XCTAssertEqual(stored[CostHistoryStore.dayKey(today, calendar: cal)]?.tokens, 2_570_000)
-        XCTAssertNil(stored[CostHistoryStore.dayKey(yesterday, calendar: cal)])
+        XCTAssertNotNil(stored[CostHistoryStore.dayKey(yesterday, calendar: cal)])
     }
 
     /// Rev 3 regression (2026-08-25): a session merely OPENED today (bumping
@@ -2174,9 +2203,10 @@ final class NewProviderTests: XCTestCase {
             calendar.isDate($0.date, inSameDayAs: oldDay)
         })
         XCTAssertEqual(migratedDay.tokens, 25)
-        XCTAssertEqual(merged.todayTokens, 0)
+        // The legacy day the rescan did not report stays (history is never
+        // deleted); the day it did report carries the corrected count.
         let stored = CostHistoryStore.read(url: historyURL).sources?["kiro"] ?? [:]
-        XCTAssertNil(stored[CostHistoryStore.dayKey(today, calendar: calendar)])
+        XCTAssertNotNil(stored[CostHistoryStore.dayKey(today, calendar: calendar)])
         XCTAssertEqual(stored[CostHistoryStore.dayKey(oldDay, calendar: calendar)]?.tokens, 25)
     }
 
