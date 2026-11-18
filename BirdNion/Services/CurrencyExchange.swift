@@ -123,8 +123,13 @@ final class CurrencyExchange: @unchecked Sendable {
 enum PreferredCurrency {
     static let defaultsKey = "preferredCurrencyCode"
 
+    /// Where the preference is read. Tests point this at a private suite: the
+    /// test host shares the installed app's defaults domain, so writing the
+    /// real key there would flip the currency of the BirdNion the user has open.
+    nonisolated(unsafe) static var defaults: UserDefaults = .standard
+
     static var preference: String {
-        UserDefaults.standard.string(forKey: defaultsKey) ?? "auto"
+        defaults.string(forKey: defaultsKey) ?? "auto"
     }
 
     /// Resolved ISO code used for formatting ("auto" → system currency code,

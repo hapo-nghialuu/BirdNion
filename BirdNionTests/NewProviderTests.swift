@@ -34,23 +34,24 @@ private actor DevinCandidateTransport: ProviderHTTPTransport {
 /// hooks; these cover the three hand-written API-key parsers.
 @MainActor
 final class NewProviderTests: XCTestCase {
-    private var savedCurrencyPreference: Any?
+    private var currencySuiteName = ""
 
     /// Some tests assert USD-formatted subtitles; pin the preferred currency
     /// so a non-USD system locale does not reroute `usdString` through
     /// `PreferredCurrency.format`.
     override func setUp() {
         super.setUp()
-        savedCurrencyPreference = UserDefaults.standard.object(forKey: PreferredCurrency.defaultsKey)
-        UserDefaults.standard.set("USD", forKey: PreferredCurrency.defaultsKey)
+        // A private suite, never the shared app domain: the test host is the
+        // installed app's bundle id, so the real key is the user's setting.
+        currencySuiteName = "birdnion.tests.currency.\(UUID().uuidString)"
+        let suite = UserDefaults(suiteName: currencySuiteName)!
+        suite.set("USD", forKey: PreferredCurrency.defaultsKey)
+        PreferredCurrency.defaults = suite
     }
 
     override func tearDown() {
-        if let savedCurrencyPreference {
-            UserDefaults.standard.set(savedCurrencyPreference, forKey: PreferredCurrency.defaultsKey)
-        } else {
-            UserDefaults.standard.removeObject(forKey: PreferredCurrency.defaultsKey)
-        }
+        PreferredCurrency.defaults = .standard
+        UserDefaults().removePersistentDomain(forName: currencySuiteName)
         super.tearDown()
     }
 
