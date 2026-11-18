@@ -502,42 +502,134 @@ enum ClaudeCLIAccountStore {
     }
 
     static let shellRCMarker = "# >>> BirdNion Claude account >>>"
+    static let shellRCEndMarker = "# <<< BirdNion Claude account <<<"
 
     /// zsh/bash function that points every new `claude` launch at the account
     /// selected in BirdNion. It only sets the variable for that one command,
-    /// so the shell's own environment is never changed.
+    /// so the shell's own environment is never changed. With the system
+    /// account selected it clears `CLAUDE_CONFIG_DIR`, so a value the terminal
+    /// host exports (Orca sets its own Claude profile per pane) cannot win
+    /// over BirdNion's choice.
     static var shellSnippet: String {
         """
         \(shellRCMarker)
         claude() {
           local d; d="$(cat "$HOME/.config/birdnion/claude-active-dir" 2>/dev/null)"
-          if [ -n "$d" ]; then CLAUDE_CONFIG_DIR="$d" command claude "$@"; else command claude "$@"; fi
+          if [ -n "$d" ]; then CLAUDE_CONFIG_DIR="$d" command claude "$@"; else env -u CLAUDE_CONFIG_DIR claude "$@"; fi
         }
-        # <<< BirdNion Claude account <<<
+        \(shellRCEndMarker)
         """
+    }
+
+    /// fish has its own function syntax; same behaviour as `shellSnippet`.
+    static var fishSnippet: String {
+        """
+        \(shellRCMarker)
+        function claude --description 'Claude Code on the account selected in BirdNion'
+            set -l d (cat "$HOME/.config/birdnion/claude-active-dir" 2>/dev/null)
+            if test -n "$d"
+                env CLAUDE_CONFIG_DIR="$d" claude $argv
+            else
+                env -u CLAUDE_CONFIG_DIR claude $argv
+            end
+        end
+        \(shellRCEndMarker)
+        """
+    }
+
+    /// One shell startup file that can carry the wrapper.
+    struct ShellRCTarget: Equatable {
+        let url: URL
+        let snippet: String
+        /// Created when missing; otherwise only an existing file is touched,
+        /// so BirdNion never makes a shell's config appear on its own.
+        let createIfMissing: Bool
     }
 
     static func zshrcURL() -> URL {
         URL(fileURLWithPath: NSHomeDirectory()).appendingPathComponent(".zshrc")
     }
 
-    static func isShellWrapperInstalled() -> Bool {
-        guard let text = try? String(contentsOf: zshrcURL(), encoding: .utf8) else { return false }
+    /// zsh (the macOS default) always; bash through whichever of its startup
+    /// files exist (login shells read .bash_profile, others .bashrc); fish
+    /// through its own conf.d file when fish is set up.
+    static func shellRCTargets(home: URL = URL(fileURLWithPath: NSHomeDirectory()),
+                               fileManager: FileManager = .default) -> [ShellRCTarget] {
+        var targets = [ShellRCTarget(url: home.appendingPathComponent(".zshrc"),
+                                     snippet: shellSnippet, createIfMissing: true)]
+        for name in [".bashrc", ".bash_profile"] {
+            targets.append(ShellRCTarget(url: home.appendingPathComponent(name),
+                                         snippet: shellSnippet, createIfMissing: false))
+        }
+        let fishDir = home.appendingPathComponent(".config/fish", isDirectory: true)
+        if fileManager.fileExists(atPath: fishDir.path) {
+            targets.append(ShellRCTarget(
+                url: fishDir.appendingPathComponent("conf.d/birdnion-claude.fish"),
+                snippet: fishSnippet, createIfMissing: true))
+        }
+        return targets
+    }
+
+    static func isShellWrapperInstalled(url: URL = zshrcURL()) -> Bool {
+        guard let text = try? String(contentsOf: url, encoding: .utf8) else { return false }
         return text.contains(shellRCMarker)
     }
 
-    static func installShellWrapper() throws {
-        guard !isShellWrapperInstalled() else { return }
-        let url = zshrcURL()
-        // Append in place (never an atomic replace): ~/.zshrc is often a
-        // symlink into a dotfiles repo and must stay one.
+    /// Replaces an installed wrapper block that differs from `snippet`.
+    /// Returns true when the file was rewritten. Writes in place (never an
+    /// atomic replace) so a symlinked rc file stays a symlink.
+    @discardableResult
+    static func upgradeShellWrapperIfNeeded(url: URL = zshrcURL(),
+                                            snippet: String = shellSnippet) throws -> Bool {
+        guard let text = try? String(contentsOf: url, encoding: .utf8),
+              let start = text.range(of: shellRCMarker),
+              let end = text.range(of: shellRCEndMarker, range: start.upperBound..<text.endIndex)
+        else { return false }
+        guard text[start.lowerBound..<end.upperBound] != snippet else { return false }
+        let updated = text.replacingCharacters(in: start.lowerBound..<end.upperBound, with: snippet)
+        try Data(updated.utf8).write(to: url)
+        return true
+    }
+
+    private static var didCheckShellWrapper = false
+
+    /// Once per launch, when the user has opted in (zsh wrapper present):
+    /// refresh outdated blocks and add the wrapper to every other shell set
+    /// up on this Mac, so `claude` follows BirdNion in bash and fish too.
+    /// Failures wait for the next launch; the old wrapper keeps working.
+    static func upgradeShellWrapperOnce() {
+        guard !didCheckShellWrapper else { return }
+        didCheckShellWrapper = true
+        guard isShellWrapperInstalled() else { return }
+        try? installShellWrapper()
+    }
+
+    /// Adds the wrapper to every shell target that lacks it and refreshes the
+    /// ones holding an older block.
+    static func installShellWrapper(targets: [ShellRCTarget] = shellRCTargets()) throws {
+        for target in targets {
+            if isShellWrapperInstalled(url: target.url) {
+                try upgradeShellWrapperIfNeeded(url: target.url, snippet: target.snippet)
+                continue
+            }
+            let exists = FileManager.default.fileExists(atPath: target.url.path)
+            guard exists || target.createIfMissing else { continue }
+            try appendWrapper(target.snippet, to: target.url)
+        }
+    }
+
+    /// Append in place (never an atomic replace): rc files are often symlinks
+    /// into a dotfiles repo and must stay ones.
+    private static func appendWrapper(_ snippet: String, to url: URL) throws {
         if !FileManager.default.fileExists(atPath: url.path) {
+            try FileManager.default.createDirectory(
+                at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
             FileManager.default.createFile(atPath: url.path, contents: nil)
         }
         let handle = try FileHandle(forWritingTo: url)
         defer { try? handle.close() }
         try handle.seekToEnd()
-        try handle.write(contentsOf: Data(("\n" + shellSnippet + "\n").utf8))
+        try handle.write(contentsOf: Data(("\n" + snippet + "\n").utf8))
     }
 
     private static func shellQuoted(_ value: String) -> String {
