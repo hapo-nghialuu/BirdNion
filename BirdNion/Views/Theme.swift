@@ -170,6 +170,23 @@ enum VocabbyTheme {
     static let googleRed = fixed(0xEA4335)
     static let googleYellow = fixed(0xFBBC05)
     static let googleGreen = fixed(0x34A853)
+
+    /// Google's four colours blended in logo order — Antigravity's usage
+    /// colour in every chart. Vertical runs bottom to top (chart columns),
+    /// otherwise leading to trailing (bars, swatches).
+    static func googleGradient(vertical: Bool = false, opacity: Double = 1) -> LinearGradient {
+        LinearGradient(
+            colors: [googleBlue, googleRed, googleYellow, googleGreen].map { $0.opacity(opacity) },
+            startPoint: vertical ? .bottom : .leading,
+            endPoint: vertical ? .top : .trailing)
+    }
+
+    /// `chartExtraSource` as a fill: Antigravity draws the Google gradient.
+    static func chartExtraSourceFill(_ id: String, vertical: Bool = false) -> AnyShapeStyle {
+        id == "antigravity"
+            ? AnyShapeStyle(googleGradient(vertical: vertical))
+            : AnyShapeStyle(chartExtraSource(id))
+    }
     static let bedrock    = fixed(0xFF9900)    // AWS
     static let devin      = dyn(0x317CFF, 0x49B0FF)    // devin.ai accent-primary light/dark
     static let omp        = dyn(0xBC52C8, 0xCE7FD8)

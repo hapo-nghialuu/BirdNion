@@ -359,7 +359,7 @@ struct AgentDetailPanelRoot: View {
 
     private func miniAgentChart(days: [AgentDetailSnapshot.ActivityDay]) -> some View {
         let maxTokens = max(days.map(\.tokens).max() ?? 1, 1)
-        let agentColor = agentBrandColor(snapshot.id)
+        let agentFill = agentBrandFill(snapshot.id, vertical: true)
 
         return HStack(alignment: .bottom, spacing: 1) {
             if days.isEmpty {
@@ -371,7 +371,7 @@ struct AgentDetailPanelRoot: View {
                     VStack(spacing: 0) {
                         Spacer(minLength: 0)
                         Rectangle()
-                            .fill(day.tokens > 0 ? agentColor : VocabbyTheme.hairline)
+                            .fill(day.tokens > 0 ? agentFill : AnyShapeStyle(VocabbyTheme.hairline))
                             .frame(height: height)
                     }
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -401,16 +401,16 @@ struct AgentDetailPanelRoot: View {
             ForEach(Array(models.prefix(Self.maxModelRows))) { model in
                 HStack(spacing: 8) {
                     Rectangle()
-                        .fill(agentBrandColor(snapshot.id))
+                        .fill(agentBrandFill(snapshot.id))
                         .frame(width: 6, height: 6)
-                    Text(model.name)
+                    Text(AllUsageFormat.shortName(model.name))
                         .font(.plexSans(12))
                         .foregroundStyle(VocabbyTheme.primary)
                         .lineLimit(1)
                     Spacer(minLength: 4)
                     ZStack(alignment: .leading) {
                         Rectangle().fill(VocabbyTheme.hairline)
-                        Rectangle().fill(agentBrandColor(snapshot.id)).frame(width: 48 * CGFloat(model.percentage) / 100)
+                        Rectangle().fill(agentBrandFill(snapshot.id)).frame(width: 48 * CGFloat(model.percentage) / 100)
                     }
                     .frame(width: 48, height: 3)
                     Text("\(AllUsageFormat.tokensShort(model.tokens)) · \(AllUsageFormat.usd(model.usd))")
@@ -615,6 +615,13 @@ struct AgentDetailPanelRoot: View {
     private var effectiveConfigPath: String? {
         if let p = snapshot.configPath { return p }
         return snapshot.evidence.first(where: { $0.kind == .configuration })?.token
+    }
+
+    /// Antigravity draws Google's four colours; others their brand colour.
+    private func agentBrandFill(_ id: InstalledAgentID, vertical: Bool = false) -> AnyShapeStyle {
+        id == .antigravity
+            ? AnyShapeStyle(VocabbyTheme.googleGradient(vertical: vertical))
+            : AnyShapeStyle(agentBrandColor(id))
     }
 
     private func agentBrandColor(_ id: InstalledAgentID) -> Color {

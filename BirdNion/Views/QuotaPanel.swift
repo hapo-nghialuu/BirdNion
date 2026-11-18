@@ -5255,7 +5255,7 @@ struct AntigravityUsageChartCard: View {
                     VStack(spacing: 0) {
                         Spacer(minLength: 0)
                         Rectangle()
-                            .fill(barColor(for: day))
+                            .fill(barFill(for: day))
                             .frame(height: barHeight)
                     }
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -5276,10 +5276,12 @@ struct AntigravityUsageChartCard: View {
         }
     }
 
-    private func barColor(for day: LocalAgentDailyUsage) -> Color {
-        if day.tokens <= 0 { return VocabbyTheme.track }
-        if day.date == daily30.last?.date { return VocabbyTheme.antigravity }
-        return VocabbyTheme.antigravity.opacity(0.78)
+    /// Google's four colours blended along each column, bottom to top (the
+    /// mix the Antigravity quota bar used); today's column at full strength.
+    private func barFill(for day: LocalAgentDailyUsage) -> AnyShapeStyle {
+        if day.tokens <= 0 { return AnyShapeStyle(VocabbyTheme.track) }
+        let opacity = day.date == daily30.last?.date ? 1.0 : 0.78
+        return AnyShapeStyle(VocabbyTheme.googleGradient(vertical: true, opacity: opacity))
     }
 
     private func dayLabel(_ date: Date) -> String {
@@ -5318,7 +5320,7 @@ struct ClaudeAdminUsageChartCard: View {
             }
             barChart.frame(height: 56)
             if let model = snapshot.topModels.first {
-                Text((vi ? "Model nhiều nhất: " : "Top model: ") + model.name)
+                Text((vi ? "Model nhiều nhất: " : "Top model: ") + AllUsageFormat.shortName(model.name))
                     .font(.plexMono(10))
                     .foregroundStyle(VocabbyTheme.secondary)
             }

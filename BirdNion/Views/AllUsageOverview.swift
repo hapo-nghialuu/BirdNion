@@ -1681,7 +1681,7 @@ struct CombinedChartCard: View {
                                 Rectangle().fill(VocabbyTheme.devin).frame(height: devinHeight)
                                 ForEach(extraKeys, id: \.self) { key in
                                     Rectangle()
-                                        .fill(VocabbyTheme.chartExtraSource(key))
+                                        .fill(VocabbyTheme.chartExtraSourceFill(key, vertical: true))
                                         .frame(height: barHeight * CGFloat(
                                             Double(day.extras[key]?.tokens ?? 0) / Double(day.tokens)))
                                 }
@@ -1757,7 +1757,7 @@ struct CombinedChartCard: View {
                                 Rectangle().fill(VocabbyTheme.devin).frame(height: devinHeight)
                                 ForEach(extraKeys, id: \.self) { key in
                                     Rectangle()
-                                        .fill(VocabbyTheme.chartExtraSource(key))
+                                        .fill(VocabbyTheme.chartExtraSourceFill(key, vertical: true))
                                         .frame(height: barHeight * CGFloat(
                                             Double(hour.extras[key]?.tokens ?? 0) / Double(hour.tokens)))
                                 }
@@ -1907,7 +1907,7 @@ struct DayDetailPanelRoot: View {
                        usd: day.devinUSD, tokens: day.devinTokens),
         ] + day.extras.keys.sorted().map { key in
             AgentSlice(id: key, name: LocalAgentCostEngine.displayName(sourceRawValue: key),
-                       color: AnyShapeStyle(VocabbyTheme.chartExtraSource(key)),
+                       color: VocabbyTheme.chartExtraSourceFill(key),
                        usd: day.extras[key]?.usd ?? 0, tokens: day.extras[key]?.tokens ?? 0)
         })
         // Parenthesized so filter and sort cover the built-in agents too, not
@@ -2150,7 +2150,7 @@ struct DayDetailPanelRoot: View {
         case "omp": return AnyShapeStyle(VocabbyTheme.chartOMPBar())
         case "pi": return AnyShapeStyle(VocabbyTheme.chartPi)
         case "devin": return AnyShapeStyle(VocabbyTheme.devin)
-        case "antigravity": return AnyShapeStyle(VocabbyTheme.antigravity)
+        case "antigravity": return AnyShapeStyle(VocabbyTheme.googleGradient())
         default: return AnyShapeStyle(VocabbyTheme.chartCodex)
         }
     }
@@ -2225,7 +2225,7 @@ struct CombinedTopModelsCard: View {
                         Circle()
                             .fill(sourceColor(model.source))
                             .frame(width: 6, height: 6)
-                        Text(model.name)
+                        Text(AllUsageFormat.shortName(model.name))
                             .font(.plexSans(12))
                             .foregroundStyle(VocabbyTheme.primary)
                             .lineLimit(1)
@@ -2256,7 +2256,7 @@ struct CombinedTopModelsCard: View {
         case "omp": AnyShapeStyle(VocabbyTheme.chartOMPBar())
         case "pi": AnyShapeStyle(VocabbyTheme.chartPi)
         case "devin": AnyShapeStyle(VocabbyTheme.devin)
-        default: AnyShapeStyle(VocabbyTheme.chartExtraSource(source))
+        default: VocabbyTheme.chartExtraSourceFill(source)
         }
     }
 }
@@ -2310,10 +2310,57 @@ enum AllUsageFormat {
         "\(self.tokens(tokens)) · \(self.usd(usd))"
     }
 
+    /// Every model shown in the UI reads as a name, never a raw id.
     static func shortName(_ model: String) -> String {
-        if model.hasPrefix("claude-") {
-            return String(model.dropFirst(7))
+        modelDisplayName(model)
+    }
+
+    /// Readable name for a model id: "claude-opus-5-5" → "Claude Opus 5.5",
+    /// "gpt-6.2-astra" → "GPT 6.2 Astra", "gemini-pro-orchestrator" →
+    /// "Gemini Pro (Orchestrator)". Version digits join with dots, date
+    /// stamps and Antigravity's "agy" tag are dropped, a vendor prefix
+    /// ("openai.", "deepseek/") is removed, and a ":free"/"[1m]" tag is kept
+    /// as a suffix. Already-readable names pass through unchanged.
+    static func modelDisplayName(_ model: String) -> String {
+        var id = model.trimmingCharacters(in: .whitespaces)
+        guard !id.isEmpty, !id.contains(" "), !id.hasPrefix("<") else { return model }
+        var tags: [String] = []
+        if let open = id.firstIndex(of: "["), id.hasSuffix("]") {
+            tags.append(String(id[open...])); id = String(id[..<open])
         }
-        return model
+        if let colon = id.lastIndex(of: ":") {
+            tags.append("(\(id[id.index(after: colon)...]))"); id = String(id[..<colon])
+        }
+        if let slash = id.lastIndex(of: "/") { id = String(id[id.index(after: slash)...]) }
+        if let dot = id.firstIndex(of: "."), let dash = id.firstIndex(of: "-"), dot < dash,
+           id[..<dot].allSatisfy(\.isLetter) {
+            id = String(id[id.index(after: dot)...])
+        }
+        let brands = ["gemini": "Gemini", "claude": "Claude", "gpt": "GPT", "grok": "Grok",
+                      "deepseek": "DeepSeek", "minimax": "MiniMax", "qwen": "Qwen",
+                      "kimi": "Kimi", "glm": "GLM", "nvidia": "NVIDIA"]
+        let roles = ["orchestrator": "Orchestrator", "worker": "Worker"]
+        var words: [String] = []
+        var roleTags: [String] = []
+        var version: [String] = []
+        func flushVersion() {
+            if !version.isEmpty { words.append(version.joined(separator: ".")); version = [] }
+        }
+        for part in id.split(separator: "-").map(String.init) {
+            if part.allSatisfy(\.isNumber) {
+                if part.count >= 6 { continue }          // date stamp
+                version.append(part); continue
+            }
+            flushVersion()
+            let lower = part.lowercased()
+            if lower == "agy" { continue }
+            if let role = roles[lower] { roleTags.append("(\(role))"); continue }
+            if let brand = brands[lower] { words.append(brand); continue }
+            words.append(part.contains(where: \.isUppercase)
+                         ? part : part.prefix(1).uppercased() + part.dropFirst())
+        }
+        flushVersion()
+        guard !words.isEmpty else { return model }
+        return (words + roleTags + tags).joined(separator: " ")
     }
 }

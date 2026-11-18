@@ -173,4 +173,33 @@ final class LocalCostSourceTests: XCTestCase {
         XCTAssertEqual(step.id, turn.stepID)
         XCTAssertEqual(step.timestampMs, 1_795_000_000_500)
     }
+
+    func testAntigravityPlanNamePrefersThePaidTier() {
+        let paid = Data(#"{"currentTier":{"id":"free-tier","name":"Antigravity"},"paidTier":{"id":"g1-ultra-lite-tier","name":"Google AI Ultra"}}"#.utf8)
+        XCTAssertEqual(AntigravityAccountCloudQuota.planName(from: paid), "Google AI Ultra")
+        let free = Data(#"{"currentTier":{"id":"free-tier","name":"Antigravity"}}"#.utf8)
+        XCTAssertEqual(AntigravityAccountCloudQuota.planName(from: free), "Antigravity")
+        XCTAssertNil(AntigravityAccountCloudQuota.planName(from: Data("{}".utf8)))
+    }
+
+    func testModelIdsReadAsNames() {
+        XCTAssertEqual(AllUsageFormat.modelDisplayName("gemini-pro-orchestrator"), "Gemini Pro (Orchestrator)")
+        XCTAssertEqual(AllUsageFormat.modelDisplayName("gemini-flash-worker-agy"), "Gemini Flash (Worker)")
+        XCTAssertEqual(AllUsageFormat.modelDisplayName("gemini-4-carbon"), "Gemini 4 Carbon")
+        XCTAssertEqual(AllUsageFormat.modelDisplayName("gemini-3.1-flash-lite"), "Gemini 3.1 Flash Lite")
+        XCTAssertEqual(AllUsageFormat.modelDisplayName("claude-opus-4-6-thinking"), "Claude Opus 4.6 Thinking")
+        XCTAssertEqual(AllUsageFormat.modelDisplayName("claude-opus-5-5"), "Claude Opus 5.5")
+        XCTAssertEqual(AllUsageFormat.modelDisplayName("claude-opus-5-5[1m]"), "Claude Opus 5.5 [1m]")
+        XCTAssertEqual(AllUsageFormat.modelDisplayName("claude-haiku-4-5-20251001"), "Claude Haiku 4.5")
+        XCTAssertEqual(AllUsageFormat.modelDisplayName("gpt-6.2-astra"), "GPT 6.2 Astra")
+        XCTAssertEqual(AllUsageFormat.modelDisplayName("gpt-5.4-mini"), "GPT 5.4 Mini")
+        XCTAssertEqual(AllUsageFormat.modelDisplayName("openai.gpt-5.6-luna"), "GPT 5.6 Luna")
+        XCTAssertEqual(AllUsageFormat.modelDisplayName("grok-4.5"), "Grok 4.5")
+        XCTAssertEqual(AllUsageFormat.modelDisplayName("deepseek/deepseek-v4-flash-0731"), "DeepSeek V4 Flash 0731")
+        XCTAssertEqual(AllUsageFormat.modelDisplayName("nvidia/nemotron-3-ultra-550b-a55b:free"), "Nemotron 3 Ultra 550b A55b (free)")
+        XCTAssertEqual(AllUsageFormat.modelDisplayName("MiniMax-M3"), "MiniMax M3")
+        // Already readable or synthetic values pass through.
+        XCTAssertEqual(AllUsageFormat.modelDisplayName("Gemini Pro (Orchestrator)"), "Gemini Pro (Orchestrator)")
+        XCTAssertEqual(AllUsageFormat.modelDisplayName("<synthetic>"), "<synthetic>")
+    }
 }
