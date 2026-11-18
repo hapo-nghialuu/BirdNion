@@ -150,6 +150,14 @@ func isTransientForLastGood(rawError: String?) -> Bool {
     guard let rawError, !rawError.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
         return false
     }
+    // Hiccups of the interactive `claude /usage` probe: the panel had not
+    // finished loading, or the PTY session ended before printing it. The next
+    // poll succeeds, so keep the last good numbers instead of an error card.
+    let probeHiccups = ["still loading usage data", "claude cli session exited",
+                        "claude cli session timed out", "no decodable output",
+                        "missing current session", "claude không trả dữ liệu"]
+    let lowered = rawError.lowercased()
+    if probeHiccups.contains(where: lowered.contains) { return true }
     switch classify(rawError: rawError) {
     case .networkUnreachableOrTimeout, .rateLimited:
         return true

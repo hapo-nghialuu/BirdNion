@@ -359,4 +359,16 @@ final class StaleCauseCopyTests: XCTestCase {
         XCTAssertFalse(vietnamese.contains("cài đặt"))
         XCTAssertFalse(vietnamese.contains("kết nối"))
     }
+
+    func testClaudeCLIProbeHiccupsKeepLastGoodNumbers() {
+        for raw in ["Claude: Claude CLI /usage is still loading usage data.",
+                    "Claude: Claude CLI session exited.",
+                    "Claude: direct claude produced no decodable output",
+                    "Claude: Missing Current session.",
+                    "Claude không trả dữ liệu"] {
+            XCTAssertTrue(isTransientForLastGood(rawError: raw), raw)
+        }
+        // Credential problems still surface immediately.
+        XCTAssertFalse(isTransientForLastGood(rawError: "Token Claude hết hạn — đăng nhập lại bằng Claude Code"))
+    }
 }
