@@ -247,6 +247,34 @@ struct QuotaOverview: View {
         }
     }
 
+    /// Antigravity: 30-day local cost chart + own budget, from the same
+    /// local conversation-DB scan the All tab uses (no network). Split out of
+    /// `providerDetailStack` to keep that expression type-checkable.
+    @ViewBuilder
+    private func antigravityCostCards() -> some View {
+        let report = extraReports[.antigravity]
+        if let report, !report.isEmpty {
+            AntigravityUsageChartCard(report: report)
+        }
+        if settings.antigravityMonthlyBudgetUSD.isFinite,
+           settings.antigravityMonthlyBudgetUSD > 0 {
+            let combined = report.map {
+                CombinedUsageReport.build(
+                    claude: nil, codex: nil, extraReports: [.antigravity: $0],
+                    includeClaude: false, includeCodex: false, includeGrok: false,
+                    includeKiro: false, includeOMP: false, includePi: false,
+                    includeDevin: false, extraInclude: [.antigravity])
+            }
+            ProviderBudgetCard(
+                providerId: "antigravity", providerName: "Antigravity",
+                color: VocabbyTheme.antigravity,
+                budgetUSD: settings.antigravityMonthlyBudgetUSD,
+                confidence: combined?.extraConfidences[.antigravity],
+                daily: combined?.daily ?? [],
+                source: .antigravity)
+        }
+    }
+
     /// The selected-provider detail stack (header → lowest hero → windows
     /// + credits → optional charts / accounts). Split out of `body` because
     /// the combined expression (this stack inline inside the outer
@@ -267,10 +295,10 @@ struct QuotaOverview: View {
                 ClaudeAccountStrip()
             } else if s.id == "codex" {
                 CodexAccountStrip()
+            } else if s.id == "antigravity" {
+                AntigravityAccountStrip()
             }
-            // Antigravity lists every account below, the active one included,
-            // so the hero would just repeat that account's first row.
-            if s.error == nil, !s.windows.isEmpty, s.id != "antigravity" {
+            if s.error == nil, !s.windows.isEmpty {
                 QuotaSummaryStrip(status: s)
             }
             ProviderCard(status: s)
@@ -350,11 +378,6 @@ struct QuotaOverview: View {
             if s.id == "freemodel" {
                 FreemodelAccountsPopoverSection()
             }
-            // Antigravity OAuth account selection only. This never writes the
-            // selected credential into Antigravity, Gemini CLI, OMP or Keychain.
-            if s.id == "antigravity" {
-                AntigravityAccountsPopoverSection()
-            }
             // ElevenLabs: multi API-key switcher (same card pattern).
             if s.id == "elevenlabs" {
                 ElevenLabsKeysPopoverSection()
@@ -404,6 +427,9 @@ struct QuotaOverview: View {
                     confidence: kiroBudgetCombined?.kiroConfidence,
                     daily: kiroBudgetCombined?.daily ?? [],
                     source: .kiro)
+            }
+            if s.id == "antigravity" {
+                antigravityCostCards()
             }
             // Devin CLI: 30-day token chart from local transcripts — same
             // parity as the Codex/Grok local-scan cards.
@@ -869,12 +895,15 @@ struct QuotaOverview: View {
 
     /// Generic extra local cost sources scan — all registered extras are
     /// scanned as one set (single coordinator lane) whenever the All tab is
-    /// open and they are authorized.
+    /// open and they are authorized. The Antigravity tab requests the same set
+    /// so both tabs share one cached scan.
     private func triggerExtrasReportIfNeeded(providerId: String) {
         let taskId = UUID().uuidString
         extraReportTaskId = taskId
         let needed = authorizedCostSources.intersection(LocalAgentCostEngine.extraSources)
-        guard providerId == "all", !needed.isEmpty else {
+        let wantsExtras = providerId == "all"
+            || (providerId == "antigravity" && needed.contains(.antigravity))
+        guard wantsExtras, !needed.isEmpty else {
             loadingCostSources.subtract(LocalAgentCostEngine.extraSources)
             extraReports = [:]
             return
@@ -1829,21 +1858,7 @@ struct ProviderCard: View {
     var body: some View {
         // Design: windows list under hairline; optional CREDITS last row.
         VStack(alignment: .leading, spacing: 0) {
-            if status.id == "antigravity",
-               AntigravityAccountQuotaPresentation.usesAccountCard(
-                   accountCount: AntigravityOAuthStore.load().accounts.count)
-            {
-                // Antigravity is listed per account, not per window: the card
-                // renders cached per-account snapshots, so it must survive an
-                // error or a still-running refresh of the *active* account —
-                // otherwise one bad probe hides every other account's quota.
-                if let err = status.error {
-                    errorBlock(err)
-                } else if let warning = quota.staleWarning(for: status.id) {
-                    StaleQuotaBanner(providerID: status.id, warning: warning)
-                }
-                AntigravityAllAccountsQuotaCard()
-            } else if let err = status.error {
+            if let err = status.error {
                 errorBlock(err)
             } else if status.popoverIsAwaitingFirstContent {
                 // A provider whose only figure is a credit balance has no
@@ -3082,42 +3097,6 @@ struct QuotaBarWithPaceMarker: View {
     }
 }
 
-// MARK: - Antigravity semantic quota rows
-
-private struct AntigravityQuotaBar: View {
-    let remainingPct: Int
-
-    private var googleGradient: LinearGradient {
-        LinearGradient(
-            gradient: Gradient(colors: [
-                VocabbyTheme.googleBlue,
-                VocabbyTheme.googleRed,
-                VocabbyTheme.googleYellow,
-                VocabbyTheme.googleGreen,
-            ]),
-            startPoint: .leading,
-            endPoint: .trailing)
-    }
-
-    var body: some View {
-        // Match `QuotaBarWithPaceMarker`: fixed-height GeometryReader so the
-        // fill cannot float/expand into neighboring rows.
-        GeometryReader { geo in
-            ZStack(alignment: .leading) {
-                Rectangle()
-                    .fill(VocabbyTheme.track)
-                    .frame(height: QuotaBarLayout.compactHeight)
-                Rectangle()
-                    .fill(googleGradient)
-                    .frame(
-                        width: max(0, geo.size.width * CGFloat(max(0, min(100, remainingPct))) / 100),
-                        height: QuotaBarLayout.compactHeight)
-            }
-        }
-        .frame(height: QuotaBarLayout.compactHeight)
-    }
-}
-
 // MARK: - ElevenLabs keys (popover)
 
 /// ElevenLabs multi-key switcher — same collapsed-card pattern as FreeModel:
@@ -3292,287 +3271,52 @@ struct ElevenLabsKeysPopoverSection: View {
 
 // MARK: - Antigravity accounts (popover)
 
-/// Compact OAuth account manager for the selected Antigravity quota context.
-/// Credentials stay in BirdNion's private store and are never exported to the
-/// Antigravity app, Gemini CLI, OMP, or Keychain.
-struct AntigravityAccountsPopoverSection: View {
-    @EnvironmentObject var settings: SettingsStore
-    @EnvironmentObject var quota: QuotaService
+/// Shared state for the Antigravity account menu. Accounts live in BirdNion's
+/// private OAuth store; switching only changes which account BirdNion polls and
+/// never writes the credential into Antigravity, Gemini CLI, OMP or Keychain.
+@MainActor
+final class AntigravityAccountMenuModel: ObservableObject {
+    static let shared = AntigravityAccountMenuModel()
 
-    @State private var store = AntigravityOAuthStore.Store()
-    @State private var revealed = false
-    @State private var busy = false
-    @State private var errorText: String?
-    @State private var accountPendingRemoval: AntigravityOAuthStore.Account?
+    @Published private(set) var store = AntigravityOAuthStore.Store()
+    @Published private(set) var busy = false
+    @Published var pendingRemovalLabel: String?
+    @Published var errorText: String?
+    /// Isolated agy login for one account at a time.
+    let agyLogin = AntigravityIsolatedLoginSession()
+    @Published private(set) var agyLoginTargetLabel: String?
 
-    // Đăng nhập agy cô lập cho một account cụ thể (một phiên tại một thời
-    // điểm — `agyLoginTargetLabel` chọn account nào đang mở panel).
-    @StateObject private var agyLogin = AntigravityIsolatedLoginSession()
-    @State private var agyLoginTargetLabel: String?
-    // "Công tắc" áp account ra công cụ thật: agy CLI (~/.gemini) + import omp.
+    var active: AntigravityOAuthStore.Account? { AntigravityOAuthStore.activeAccount(in: store) }
 
-    var body: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            collapsedRow
-            if revealed {
-                Divider()
-                    .overlay(VocabbyTheme.border)
-                    .padding(.vertical, 6)
-                if store.accounts.isEmpty {
-                    Text(L10n.t("antigravity.popover.noAccounts", settings.appLanguage))
-                        .font(.plexSans(11))
-                        .foregroundStyle(VocabbyTheme.secondary)
-                        .padding(.vertical, 5)
-                } else {
-                    ForEach(store.accounts, id: \.label) { account in
-                        accountRow(account)
-                    }
-                }
-                if let errorText {
-                    Text(L10n.providerText(errorText, preference: settings.appLanguage))
-                        .font(.plexSans(10))
-                        .foregroundStyle(VocabbyTheme.critical)
-                        .fixedSize(horizontal: false, vertical: true)
-                        .padding(.vertical, 4)
-                }
-                addAccountRow
-            }
-        }
-        .vocabbyCard()
-        .onAppear {
-            reload()
-            if store.accounts.isEmpty { revealed = true }
-        }
-        .onReceive(NotificationCenter.default.publisher(for: .birdnionRefresh)) { note in
-            guard note.object as? String == "antigravity" else { return }
-            reload()
-        }
-    }
-
-    private func accountName(_ account: AntigravityOAuthStore.Account) -> String {
-        account.email ?? account.label
-    }
-
-    private var activeAccount: AntigravityOAuthStore.Account? {
-        AntigravityOAuthStore.activeAccount(in: store)
-    }
-
-    private var collapsedRow: some View {
-        let lang = settings.appLanguage
-        return HStack(alignment: .center, spacing: 12) {
-            Image(systemName: "person.crop.circle")
-                .font(.system(size: 15, weight: .semibold))
-                .foregroundStyle(VocabbyTheme.blue)
-                .frame(width: 30, height: 30)
-                .background(VocabbyTheme.blue.opacity(0.12))
-                .clipShape(RoundedRectangle(cornerRadius: InstrumentShape.controlRadius, style: .continuous))
-
-            VStack(alignment: .leading, spacing: 3) {
-                Text(L10n.t("popover.accounts", lang))
-                    .font(.plexSans(12, weight: .semibold))
-                    .foregroundStyle(VocabbyTheme.primary)
-                Text(activeAccount.map {
-                    L10n.f("antigravity.popover.activeAccount", lang, accountName($0))
-                } ?? L10n.t("antigravity.popover.noAccounts", lang))
-                    .font(.plexSans(11))
-                    .foregroundStyle(VocabbyTheme.secondary)
-                    .lineLimit(1)
-                    .truncationMode(.middle)
-            }
-
-            Spacer(minLength: 8)
-
-            Text("\(store.accounts.count)")
-                .font(.plexMono(11, weight: .semibold))
-                .foregroundStyle(VocabbyTheme.secondary)
-                .padding(.horizontal, 7)
-                .padding(.vertical, 2)
-                .background(
-                    RoundedRectangle(cornerRadius: InstrumentShape.controlRadius, style: .continuous)
-                        .fill(VocabbyTheme.segment)
-                )
-            Image(systemName: revealed ? "chevron.up" : "chevron.down")
-                .font(.system(size: 10, weight: .semibold))
-                .foregroundStyle(VocabbyTheme.tertiary)
-        }
-        .contentShape(Rectangle())
-        .pointingHandCursor()
-        .onTapGesture { revealed.toggle() }
-        .accessibilityElement(children: .combine)
-        .accessibilityAddTraits(.isButton)
-        .accessibilityLabel(L10n.t("popover.accounts", lang))
-        .accessibilityValue(activeAccount.map {
-            L10n.f("antigravity.popover.activeAccount", lang, accountName($0))
-        } ?? L10n.t("antigravity.popover.noAccounts", lang))
-        .accessibilityHint(revealed
-            ? L10n.t("popover.collapseAccounts", lang)
-            : L10n.t("popover.expandAccounts", lang))
-    }
-
-    private func accountRow(_ account: AntigravityOAuthStore.Account) -> some View {
-        let isActive = account.label == activeAccount?.label
-        let name = accountName(account)
-        return VStack(alignment: .leading, spacing: 6) {
-            HStack(spacing: 8) {
-                Button {
-                    guard !isActive else { return }
-                    switchTo(account)
-                } label: {
-                    HStack(spacing: 8) {
-                        Image(systemName: isActive ? "largecircle.fill.circle" : "circle")
-                            .font(.system(size: 14))
-                            .foregroundStyle(isActive ? VocabbyTheme.blue : VocabbyTheme.tertiary)
-                        VStack(alignment: .leading, spacing: 1) {
-                            Text(name)
-                                .font(.plexSans(12, weight: .medium))
-                                .foregroundStyle(VocabbyTheme.primary)
-                                .lineLimit(1)
-                                .truncationMode(.middle)
-                            if isActive {
-                                Text(L10n.t("elevenlabs.activeBadge", settings.appLanguage))
-                                    .font(.plexMono(9, weight: .semibold))
-                                    .foregroundStyle(VocabbyTheme.success)
-                            }
-                        }
-                        Spacer(minLength: 6)
-                        if !isActive {
-                            Image(systemName: "arrow.triangle.2.circlepath")
-                                .font(.system(size: 11, weight: .semibold))
-                                .foregroundStyle(VocabbyTheme.blue)
-                                .frame(width: 28, height: 28)
-                                .background(
-                                    RoundedRectangle(
-                                        cornerRadius: InstrumentShape.controlRadius,
-                                        style: .continuous
-                                    )
-                                    .fill(VocabbyTheme.blue.opacity(0.10))
-                                )
-                        }
-                    }
-                    .contentShape(Rectangle())
-                }
-                .buttonStyle(.plain)
-                .disabled(isActive || busy)
-                .pointingHandCursor(enabled: !isActive && !busy)
-                .help(isActive
-                      ? L10n.t("popover.accountSelectedHelp", settings.appLanguage)
-                      : L10n.t("freemodel.switchAccount", settings.appLanguage))
-                .accessibilityLabel(name)
-                .accessibilityValue(L10n.t(
-                    isActive ? "popover.accountSelected" : "popover.switchReady",
-                    settings.appLanguage
-                ))
-
-                if accountPendingRemoval?.label == account.label {
-                    // Xác nhận xoá NGAY TẠI DÒNG (thay confirmationDialog — dialog
-                    // này chập chờn trong NSPanel popover vì mất focus, khiến nút
-                    // xoá không ăn). Huỷ để đóng, Xoá để thực thi.
-                    Button {
-                        accountPendingRemoval = nil
-                    } label: {
-                        Text(L10n.t("ccx.pasteJSON.cancel", settings.appLanguage))
-                            .font(.plexSans(11, weight: .medium))
-                            .foregroundStyle(VocabbyTheme.secondary)
-                            .padding(.horizontal, 8)
-                            .frame(height: 24)
-                    }
-                    .buttonStyle(.plain)
-                    .pointingHandCursor(enabled: !busy)
-                    Button {
-                        removeConfirmedAccount()
-                    } label: {
-                        Text(L10n.t("provider.removeAccount", settings.appLanguage))
-                            .font(.plexSans(11, weight: .semibold))
-                            .foregroundStyle(VocabbyTheme.background)
-                            .padding(.horizontal, 10)
-                            .frame(height: 24)
-                            .background(
-                                RoundedRectangle(
-                                    cornerRadius: InstrumentShape.controlRadius,
-                                    style: .continuous
-                                )
-                                .fill(VocabbyTheme.critical)
-                            )
-                    }
-                    .buttonStyle(.plain)
-                    .pointingHandCursor(enabled: !busy)
-                    .disabled(busy)
-                } else {
-                    agyLoginAffordance(for: account)
-                    Button {
-                        accountPendingRemoval = account
-                    } label: {
-                        Image(systemName: "trash")
-                            .font(.system(size: 11, weight: .semibold))
-                            .foregroundStyle(VocabbyTheme.critical)
-                            .frame(width: 28, height: 28)
-                    }
-                    .buttonStyle(.plain)
-                    .pointingHandCursor(enabled: !busy)
-                    .disabled(busy)
-                    .help(L10n.t("provider.removeAccount", settings.appLanguage))
-                    .accessibilityLabel(
-                        L10n.f("provider.removeAccountTitle", settings.appLanguage, name))
-                }
-            }
-            if agyLoginTargetLabel == account.label {
-                agyLoginPanel(for: account)
-            }
-        }
-        .padding(.vertical, 4)
-    }
-
-    private var addAccountRow: some View {
-        Button {
-            addAccount()
-        } label: {
-            HStack(spacing: 6) {
-                if busy {
-                    ProgressView().controlSize(.small)
-                } else {
-                    Image(systemName: "plus")
-                }
-                Text(L10n.t("provider.addAccount", settings.appLanguage))
-                    .font(.plexSans(11, weight: .semibold))
-                Spacer(minLength: 0)
-            }
-            .foregroundStyle(VocabbyTheme.blue)
-            .padding(.vertical, 7)
-            .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
-        .pointingHandCursor(enabled: !busy)
-        .disabled(busy)
-        .accessibilityHint(L10n.t("antigravity.popover.addAccountHint", settings.appLanguage))
-    }
-
-    private func reload() {
+    func reload() {
         store = AntigravityOAuthStore.load()
     }
 
-    private func switchTo(_ account: AntigravityOAuthStore.Account) {
+    @discardableResult
+    func switchTo(_ label: String, language: String, refresh: () -> Void) -> Bool {
         busy = true
         defer { busy = false }
         do {
-            guard try AntigravityOAuthStore.persistActiveLabel(account.label) else {
+            guard try AntigravityOAuthStore.persistActiveLabel(label) else {
                 reload()
-                errorText = L10n.languageCode(settings.appLanguage) == "vi"
+                errorText = L10n.languageCode(language) == "vi"
                     ? "Tài khoản không còn tồn tại."
                     : "The account no longer exists."
-                return
+                return false
             }
             reload()
             errorText = nil
-            quota.refreshFromSettings("antigravity")
+            refresh()
+            return true
         } catch {
             errorText = error.localizedDescription
+            return false
         }
     }
 
-    private func addAccount() {
-        let currentStore = AntigravityOAuthStore.load()
-        guard let client = AntigravityOAuthStore.resolvedClient(store: currentStore) else {
-            errorText = L10n.languageCode(settings.appLanguage) == "vi"
+    func addAccount(language: String, refresh: @escaping () -> Void) {
+        guard let client = AntigravityOAuthStore.resolvedClient(store: AntigravityOAuthStore.load()) else {
+            errorText = L10n.languageCode(language) == "vi"
                 ? "Không thể mở đăng nhập Google. Hãy cài Antigravity.app hoặc mở Cài đặt nâng cao."
                 : "Google sign-in is unavailable. Install Antigravity.app or use Advanced setup."
             return
@@ -3582,20 +3326,14 @@ struct AntigravityAccountsPopoverSection: View {
         Task {
             do {
                 let (refreshToken, email) = try await AntigravityOAuthLogin.login(
-                    clientID: client.id,
-                    clientSecret: client.secret
-                )
+                    clientID: client.id, clientSecret: client.secret)
                 store = try AntigravityOAuthStore.persistNewLoginAccount(
-                    fallbackLabel: L10n.languageCode(settings.appLanguage) == "vi"
-                        ? "Tài khoản"
-                        : "Account",
+                    fallbackLabel: L10n.languageCode(language) == "vi" ? "Tài khoản" : "Account",
                     refreshToken: refreshToken,
                     email: email,
-                    makeActive: true
-                )
+                    makeActive: true)
                 errorText = nil
-                revealed = true
-                quota.refreshFromSettings("antigravity")
+                refresh()
             } catch {
                 errorText = error.localizedDescription
             }
@@ -3603,138 +3341,164 @@ struct AntigravityAccountsPopoverSection: View {
         }
     }
 
-    private func removeConfirmedAccount() {
-        guard let accountPendingRemoval else { return }
+    func remove(_ label: String, refresh: () -> Void) {
         busy = true
         defer {
             busy = false
-            self.accountPendingRemoval = nil
+            pendingRemovalLabel = nil
         }
         do {
-            store = try AntigravityOAuthStore.persistRemovingAccount(accountPendingRemoval.label)
+            store = try AntigravityOAuthStore.persistRemovingAccount(label)
             errorText = nil
-            quota.refreshFromSettings("antigravity")
+            refresh()
         } catch {
             errorText = error.localizedDescription
         }
     }
 
-    // MARK: - agy isolated login (one-time login flow)
-
-    /// Account đang thực sự được phục vụ quota (dù bởi agy chính hay agy cô
-    /// lập) theo snapshot mới nhất — dùng để ẩn nút "Đăng nhập vào agy" cho
-    /// account mà agy chính (HOME thật) đã đăng nhập sẵn.
-    private var currentlyServedAccountLabel: String? {
-        quota.statuses.first(where: { $0.id == "antigravity" })?.accountLabel
+    func startAgyLogin(_ label: String) {
+        agyLoginTargetLabel = label
+        agyLogin.start(accountLabel: label)
     }
 
-    private func needsAgyLogin(_ account: AntigravityOAuthStore.Account) -> Bool {
-        guard !AntigravityIsolatedAgy.hasLogin(forAccountLabel: account.label) else { return false }
-        guard let served = currentlyServedAccountLabel else { return true }
-        return served != account.label && served != account.email
-    }
-
-    @ViewBuilder
-    private func agyLoginAffordance(for account: AntigravityOAuthStore.Account) -> some View {
-        if agyLoginTargetLabel == account.label {
-            EmptyView()
-        } else if needsAgyLogin(account) {
-            Button {
-                startAgyLogin(for: account)
-            } label: {
-                Text(L10n.t("antigravity.popover.signInAgy", settings.appLanguage))
-                    .font(.plexSans(10, weight: .semibold))
-                    .foregroundStyle(VocabbyTheme.blue)
-                    .padding(.horizontal, 8)
-                    .frame(height: 24)
-                    .background(
-                        RoundedRectangle(cornerRadius: InstrumentShape.controlRadius, style: .continuous)
-                            .fill(VocabbyTheme.blue.opacity(0.10))
-                    )
-            }
-            .buttonStyle(.plain)
-            .pointingHandCursor(enabled: !busy)
-            .disabled(busy)
-            .help(L10n.t("antigravity.popover.signInAgy", settings.appLanguage))
-        } else if AntigravityIsolatedAgy.hasLogin(forAccountLabel: account.label) {
-            Text(L10n.t("antigravity.popover.agyConnected", settings.appLanguage))
-                .font(.plexMono(9, weight: .semibold))
-                .foregroundStyle(VocabbyTheme.success)
-        }
-    }
-
-    @ViewBuilder
-    private func agyLoginPanel(for account: AntigravityOAuthStore.Account) -> some View {
-        let lang = settings.appLanguage
-        VStack(alignment: .leading, spacing: 6) {
-            switch agyLogin.state {
-            case .idle, .launching:
-                HStack(spacing: 6) {
-                    ProgressView().controlSize(.small)
-                    Text(L10n.t("antigravity.login.launching", lang))
-                        .font(.plexSans(11))
-                        .foregroundStyle(VocabbyTheme.secondary)
-                }
-            case .success:
-                HStack(spacing: 6) {
-                    Image(systemName: "checkmark.circle.fill")
-                        .foregroundStyle(VocabbyTheme.success)
-                    Text(L10n.t("antigravity.popover.agyConnected", lang))
-                        .font(.plexSans(11, weight: .medium))
-                        .foregroundStyle(VocabbyTheme.success)
-                }
-            case .failed(let message):
-                VStack(alignment: .leading, spacing: 6) {
-                    Text(L10n.providerText(message, preference: lang))
-                        .font(.plexSans(10))
-                        .foregroundStyle(VocabbyTheme.critical)
-                        .fixedSize(horizontal: false, vertical: true)
-                    HStack(spacing: 8) {
-                        Button {
-                            cancelAgyLogin()
-                        } label: {
-                            Text(L10n.t("ccx.pasteJSON.cancel", lang))
-                                .font(.plexSans(11, weight: .medium))
-                                .foregroundStyle(VocabbyTheme.secondary)
-                        }
-                        .buttonStyle(.plain)
-                        .pointingHandCursor()
-                        Button {
-                            startAgyLogin(for: account)
-                        } label: {
-                            Text(L10n.t("antigravity.login.retry", lang))
-                                .font(.plexSans(11, weight: .semibold))
-                                .foregroundStyle(VocabbyTheme.blue)
-                        }
-                        .buttonStyle(.plain)
-                        .pointingHandCursor()
-                    }
-                }
-            }
-        }
-        .padding(8)
-        .background(
-            RoundedRectangle(cornerRadius: InstrumentShape.controlRadius, style: .continuous)
-                .fill(VocabbyTheme.segment)
-        )
-        .onChange(of: agyLogin.state) { _, newValue in
-            guard newValue == .success, agyLoginTargetLabel == account.label else { return }
-            // Đóng panel sau một nhịp ngắn để người dùng kịp thấy xác nhận
-            // thành công trước khi nó tự thu gọn.
-            DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
-                if agyLoginTargetLabel == account.label { agyLoginTargetLabel = nil }
-            }
-        }
-    }
-
-    private func startAgyLogin(for account: AntigravityOAuthStore.Account) {
-        agyLoginTargetLabel = account.label
-        agyLogin.start(accountLabel: account.label)
-    }
-
-    private func cancelAgyLogin() {
+    func cancelAgyLogin() {
         agyLogin.cancel()
         agyLoginTargetLabel = nil
+    }
+
+    func agyLoginFinished() {
+        agyLoginTargetLabel = nil
+    }
+
+    /// An account needs the one-time agy login unless it already has an
+    /// isolated one or the main agy is the account currently being served.
+    private func needsAgyLogin(_ account: AntigravityOAuthStore.Account, servedLabel: String?) -> Bool {
+        guard !AntigravityIsolatedAgy.hasLogin(forAccountLabel: account.label) else { return false }
+        guard let servedLabel else { return true }
+        return servedLabel != account.label && servedLabel != account.email
+    }
+
+    func entries(language: String, servedLabel: String?) -> [AccountMenuEntry] {
+        store.accounts.map { account in
+            AccountMenuEntry(
+                id: account.label, title: account.email ?? account.label,
+                subtitle: AccountSnapshotStore.antigravity.snapshot(forAccount: account.label)?.planName ?? "",
+                isDefault: false, isActive: account.label == active?.label,
+                needsLogin: needsAgyLogin(account, servedLabel: servedLabel),
+                canRemove: true,
+                quotaRemaining: lastKnownRemaining(.antigravity, accountID: account.label))
+        }
+    }
+}
+
+struct AntigravityAccountStrip: View {
+    @EnvironmentObject var settings: SettingsStore
+    @EnvironmentObject var quota: QuotaService
+    @ObservedObject private var model = AntigravityAccountMenuModel.shared
+    @State private var isOpen = false
+
+    var body: some View {
+        let index = model.store.accounts.firstIndex { $0.label == model.active?.label } ?? 0
+        AccountSwitchStrip(
+            language: settings.appLanguage,
+            value: model.store.accounts.isEmpty
+                ? L10n.t("antigravity.popover.noAccounts", settings.appLanguage)
+                : accountStripValue(email: model.active?.email ?? model.active?.label, index: index,
+                                    hidePersonal: settings.hidePersonalInfo, language: settings.appLanguage),
+            isOpen: $isOpen
+        ) {
+            AntigravityAccountMenu(
+                model: model, agyLogin: model.agyLogin, language: settings.appLanguage,
+                servedLabel: quota.statuses.first { $0.id == "antigravity" }?.accountLabel,
+                refresh: { quota.refreshFromSettings("antigravity") },
+                close: { isOpen = false })
+        }
+        .onAppear { model.reload() }
+        .onChange(of: isOpen) { _, open in
+            if open { model.reload() } else { model.pendingRemovalLabel = nil }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .birdnionRefresh)) { note in
+            guard note.object as? String == "antigravity" else { return }
+            model.reload()
+        }
+    }
+}
+
+private struct AntigravityAccountMenu: View {
+    @ObservedObject var model: AntigravityAccountMenuModel
+    @ObservedObject var agyLogin: AntigravityIsolatedLoginSession
+    let language: String
+    let servedLabel: String?
+    let refresh: () -> Void
+    let close: () -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            ForEach(model.entries(language: language, servedLabel: servedLabel)) { entry in
+                AccountMenuRowView(
+                    entry: entry, language: language,
+                    disabled: model.busy || model.agyLoginTargetLabel != nil,
+                    confirmingRemoval: model.pendingRemovalLabel == entry.id,
+                    removeConfirmText: L10n.f("acctMenu.removeConfirm", language, entry.title),
+                    onSwitch: {
+                        if model.switchTo(entry.id, language: language, refresh: refresh) { close() }
+                    },
+                    onLogin: { model.startAgyLogin(entry.id) },
+                    onAskRemove: { model.pendingRemovalLabel = entry.id },
+                    onCancelRemove: { model.pendingRemovalLabel = nil },
+                    onConfirmRemove: { model.remove(entry.id, refresh: refresh) })
+                AccountMenuRule()
+            }
+            agyLoginStatus
+            if model.store.accounts.count == 1 && model.agyLoginTargetLabel == nil {
+                AccountMenuNote(icon: "person.2", text: L10n.t("acctMenu.singleHint", language)) { EmptyView() }
+                AccountMenuRule()
+            }
+            if let errorText = model.errorText {
+                Text(L10n.providerText(errorText, preference: language))
+                    .font(.plexSans(11))
+                    .foregroundStyle(VocabbyTheme.critical)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 8)
+                AccountMenuRule()
+            }
+            AccountMenuFooter(
+                language: language,
+                addDisabled: model.busy || model.agyLoginTargetLabel != nil,
+                footerText: L10n.t("acctMenu.antigravityFooter", language),
+                onAdd: { model.addAccount(language: language, refresh: refresh) })
+        }
+        .onChange(of: agyLogin.state) { _, state in
+            guard state == .success else { return }
+            model.agyLoginFinished()
+            refresh()
+        }
+    }
+
+    @ViewBuilder
+    private var agyLoginStatus: some View {
+        if model.agyLoginTargetLabel != nil {
+            switch agyLogin.state {
+            case .idle, .launching, .success:
+                AccountMenuWaitingRow(language: language) { model.cancelAgyLogin() }
+                AccountMenuRule()
+            case .failed(let message):
+                AccountMenuNote(icon: "exclamationmark.triangle",
+                                text: L10n.providerText(message, preference: language),
+                                warning: true) {
+                    HStack(spacing: 6) {
+                        AccountMenuButton(title: L10n.t("antigravity.login.retry", language), primary: true) {
+                            if let label = model.agyLoginTargetLabel { model.startAgyLogin(label) }
+                        }
+                        AccountMenuButton(title: L10n.t("acctMenu.cancel", language)) {
+                            model.cancelAgyLogin()
+                        }
+                    }
+                }
+                AccountMenuRule()
+            }
+        }
     }
 }
 
@@ -5092,6 +4856,11 @@ private struct ProviderDayChartDetail {
              models: day.models.map { ($0.name, $0.usd, $0.tokens) }, language: language)
     }
 
+    static func from(day: LocalAgentDailyUsage, language: String) -> ProviderDayChartDetail {
+        make(date: day.date, usd: day.usd, tokens: day.tokens,
+             models: day.models.map { ($0.name, $0.usd, $0.tokens) }, language: language)
+    }
+
     private static func make(date: Date, usd: Double, tokens: Int,
                              models: [(String, Double, Int)],
                              language: String) -> ProviderDayChartDetail {
@@ -5437,6 +5206,84 @@ struct DevinCLIUsageChartCard: View {
     }
 }
 
+// MARK: - Antigravity usage chart
+
+/// 30-day cost card for Antigravity, from its local conversation databases
+/// (`AntigravityCostSource`). Same layout as `DevinCLIUsageChartCard`.
+struct AntigravityUsageChartCard: View {
+    @EnvironmentObject var settings: SettingsStore
+
+    let report: LocalAgentUsageReport
+    @State private var hoveredDay: LocalAgentDailyUsage?
+    @State private var pinnedDay: LocalAgentDailyUsage?
+
+    private var daily30: [LocalAgentDailyUsage] { Array(report.daily.suffix(30)) }
+    private var maxBarTokens: Int { max(daily30.map(\.tokens).max() ?? 0, 1) }
+
+    private var dayDetail: ProviderDayChartDetail? {
+        pinnedDay.map { ProviderDayChartDetail.from(day: $0, language: settings.appLanguage) }
+    }
+
+    var body: some View {
+        ProviderCostChartScaffold(
+            title: L10n.f("chart.providerCost30", settings.appLanguage, "Antigravity"),
+            totalUSD: report.last30USD,
+            todayUSD: report.todayUSD,
+            todayTokens: report.todayTokens,
+            startLabel: daily30.first.map { dayLabel($0.date) },
+            dayDetail: dayDetail,
+            footnote: L10n.t("chart.estimateAntigravity", settings.appLanguage),
+            barTint: VocabbyTheme.antigravity,
+            hairlineTopEdge: false,
+            hairlineBottomEdge: true
+        ) {
+            barChart
+        }
+    }
+
+    private var barChart: some View {
+        GeometryReader { geo in
+            HStack(alignment: .bottom, spacing: 2) {
+                ForEach(daily30) { day in
+                    let hasTokens = day.tokens > 0
+                    let heightFraction = UsageChartScaling.fraction(
+                        value: Double(day.tokens), maximum: Double(maxBarTokens))
+                    let barHeight = max(geo.size.height * heightFraction, hasTokens ? 3 : 1)
+                    VStack(spacing: 0) {
+                        Spacer(minLength: 0)
+                        Rectangle()
+                            .fill(barColor(for: day))
+                            .frame(height: barHeight)
+                    }
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .background((hoveredDay?.id == day.id || pinnedDay?.id == day.id)
+                                ? VocabbyTheme.selectedSurface.opacity(0.6) : Color.clear)
+                    .contentShape(Rectangle())
+                    .onHover { inside in
+                        if inside { hoveredDay = day }
+                        else if hoveredDay?.id == day.id { hoveredDay = nil }
+                    }
+                    .onTapGesture {
+                        if pinnedDay?.id == day.id { pinnedDay = nil }
+                        else { pinnedDay = day }
+                    }
+                    .help("\(dayLabel(day.date)): \(AllUsageFormat.tokens(day.tokens))")
+                }
+            }
+        }
+    }
+
+    private func barColor(for day: LocalAgentDailyUsage) -> Color {
+        if day.tokens <= 0 { return VocabbyTheme.track }
+        if day.date == daily30.last?.date { return VocabbyTheme.antigravity }
+        return VocabbyTheme.antigravity.opacity(0.78)
+    }
+
+    private func dayLabel(_ date: Date) -> String {
+        L10n.dayMonth(date, preference: settings.appLanguage)
+    }
+}
+
 // MARK: - Claude Admin usage chart
 
 /// 30-day org dashboard card for the Claude Admin API source. Mirrors
@@ -5734,158 +5581,5 @@ struct EmptyProvidersState: View {
         .padding(.top, 10)
         .padding(.bottom, 12)
         .frame(maxWidth: .infinity)
-    }
-}
-
-/// Compact read-only summary of EVERY Antigravity account and all of its quota
-/// windows — this is Antigravity's only quota surface in the popover, so it
-/// lists every logged-in account, single account included.
-///
-/// Read-only on purpose: fetching an account costs an isolated `agy` spawn
-/// (10-20s), so this renders the per-account snapshots in
-/// `AccountSnapshotStore.antigravity` rather than polling. They are filled by
-/// the refresh pass (active account) and by
-/// `AntigravityAccountSnapshotRefresher` (one stale account per pass) — an
-/// account with no isolated agy login shows "no data yet" until it has one.
-enum AntigravityAccountQuotaPresentation {
-    static func usesAccountCard(accountCount: Int) -> Bool {
-        accountCount > 0
-    }
-
-    static func displayName(for account: AntigravityOAuthStore.Account) -> String {
-        account.email ?? account.label
-    }
-}
-
-struct AntigravityAllAccountsQuotaCard: View {
-    @EnvironmentObject var settings: SettingsStore
-    @EnvironmentObject var quota: QuotaService
-
-    /// Re-read on every quota refresh so newly cached accounts appear.
-    private var store: AntigravityOAuthStore.Store { AntigravityOAuthStore.load() }
-
-    private var lang: String { settings.appLanguage }
-
-    /// "Gemini 5-hour" → "GEMINI · 5 GIỜ"; keeps the family so two accounts'
-    /// rows stay comparable at a glance. A window that carries neither period
-    /// keeps its own label — the cloud fallback names model tiers ("Pro",
-    /// "Flash"), and relabelling those as a family would be a lie.
-    private func rowLabel(_ window: QuotaWindow) -> String {
-        let raw = window.label.lowercased()
-        let period: String? = if raw.contains("5-hour") || raw.contains("5 hour") {
-            L10n.windowLabel("5 giờ", preference: lang)
-        } else if raw.contains("week") {
-            L10n.windowLabel("Tuần", preference: lang)
-        } else {
-            nil
-        }
-        guard let period else { return window.label.uppercased() }
-        let family = raw.hasPrefix("gemini") ? "Gemini" : "Claude/GPT"
-        return "\(family) · \(period)".uppercased()
-    }
-
-    /// Time left until an explicitly reported reset, as a bare duration
-    /// ("4H 59M"). `L10n.resetCountdown`'s prefix does not fit a single-line
-    /// row. Missing provider timestamps stay unknown.
-    private func resetIn(_ window: QuotaWindow) -> String {
-        guard let target = window.resetDate else { return "" }
-        let seconds = max(0, Int(target.timeIntervalSinceNow))
-        let days = seconds / 86_400
-        let hours = (seconds % 86_400) / 3_600
-        let minutes = (seconds % 3_600) / 60
-        if days > 0 { return "\(days)D \(hours)H" }
-        if hours > 0 { return "\(hours)H \(minutes)M" }
-        return "\(minutes)M"
-    }
-
-    var body: some View {
-        // Read so this card re-renders when the background per-account refresh
-        // lands: the snapshots come from a file SwiftUI cannot observe.
-        let _ = quota.accountSnapshotsRevision
-        if !store.accounts.isEmpty {
-            VStack(alignment: .leading, spacing: 0) {
-                HStack(alignment: .firstTextBaseline) {
-                    Text(L10n.t("antigravity.popover.allAccounts", lang).uppercased())
-                        .font(.plexMono(10, weight: .medium))
-                        .foregroundStyle(VocabbyTheme.muted)
-                        .tracking(0.6)
-                    Spacer(minLength: 8)
-                    Text("\(store.accounts.count)")
-                        .font(.plexMono(10, weight: .medium))
-                        .foregroundStyle(VocabbyTheme.tertiary)
-                }
-                .popoverContentInset()
-                .padding(.top, 6)
-                .padding(.bottom, 2)
-
-                ForEach(Array(store.accounts.enumerated()), id: \.element.label) { index, account in
-                    if index > 0 { PopoverInsetHairline() }
-                    accountBlock(account)
-                }
-            }
-            .frame(maxWidth: .infinity, alignment: .leading)
-        }
-    }
-
-    @ViewBuilder
-    private func accountBlock(_ account: AntigravityOAuthStore.Account) -> some View {
-        let snapshot = AccountSnapshotStore.antigravity.freshSnapshot(
-            forAccount: account.label,
-            maxAge: AntigravityAccountSnapshotRefresher.presentationMaxAge)
-        let windows = snapshot?.windows.filter { !$0.isSupplementary } ?? []
-        VStack(alignment: .leading, spacing: 0) {
-            HStack(alignment: .firstTextBaseline, spacing: 6) {
-                Text(AntigravityAccountQuotaPresentation.displayName(for: account))
-                    .font(.plexMono(11, weight: .semibold))
-                    .foregroundStyle(VocabbyTheme.primary)
-                    .lineLimit(1)
-                    .truncationMode(.middle)
-                if account.label == store.activeLabel {
-                    Circle()
-                        .fill(VocabbyTheme.antigravity)
-                        .frame(width: 5, height: 5)
-                }
-                Spacer(minLength: 8)
-                if windows.isEmpty {
-                    Text(L10n.t("antigravity.popover.accountNoQuota", lang))
-                        .font(.plexMono(10))
-                        .foregroundStyle(VocabbyTheme.tertiary)
-                }
-            }
-            .popoverContentInset()
-            .padding(.top, 10)
-            .padding(.bottom, windows.isEmpty ? 10 : 4)
-
-            ForEach(windows) { window in
-                let reset = resetIn(window)
-                HStack(alignment: .center, spacing: 8) {
-                    Text(rowLabel(window))
-                        .font(.plexMono(9))
-                        .foregroundStyle(VocabbyTheme.tertiary)
-                        .tracking(0.4)
-                        .frame(width: 118, alignment: .leading)
-                        .lineLimit(1)
-                    Text(reset)
-                        .font(.plexMono(9))
-                        .foregroundStyle(VocabbyTheme.muted)
-                        .frame(width: 44, alignment: .trailing)
-                        .lineLimit(1)
-                    AntigravityQuotaBar(remainingPct: window.remainingPct)
-                    Text("\(window.remainingPct)%")
-                        .font(.plexMono(10, weight: .semibold))
-                        .foregroundStyle(VocabbyTheme.quotaColor(remaining: window.remainingPct))
-                        .frame(width: 34, alignment: .trailing)
-                }
-                .popoverContentInset()
-                .padding(.vertical, 2)
-                .accessibilityElement(children: .combine)
-                .accessibilityLabel(
-                    "\(AntigravityAccountQuotaPresentation.displayName(for: account)), "
-                        + "\(rowLabel(window)), "
-                        + "\(window.remainingPct) percent left"
-                        + (reset.isEmpty ? "" : ", resets in \(reset)"))
-            }
-            .padding(.bottom, 8)
-        }
     }
 }

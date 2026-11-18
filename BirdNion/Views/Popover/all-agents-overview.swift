@@ -90,6 +90,7 @@ struct AgentCostRow: Identifiable {
         case .omp: VocabbyTheme.chartOMP
         case .pi: VocabbyTheme.chartPi
         case .devin: VocabbyTheme.devin
+        case .antigravity: VocabbyTheme.antigravity
         default: VocabbyTheme.tertiary
         }
     }

@@ -5196,83 +5196,28 @@ final class NewProviderTests: XCTestCase {
         }
     }
 
-    // MARK: - Antigravity per-account snapshot refresh
+    // MARK: - Antigravity budget
 
-    private func agAccount(_ label: String) -> AntigravityOAuthStore.Account {
-        AntigravityOAuthStore.Account(label: label, email: label, refreshToken: "t-\(label)")
-    }
+    func testAntigravityBudgetForecastCountsOnlyAntigravitySpend() throws {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = try XCTUnwrap(TimeZone(identifier: "UTC"))
+        let now = try XCTUnwrap(ISO8601DateFormatter().date(from: "2026-08-20T12:00:00Z"))
+        let day = CombinedDailyUsage(
+            date: calendar.startOfDay(for: now),
+            claudeUSD: 5, claudeTokens: 500, codexUSD: 0, codexTokens: 0,
+            grokUSD: 0, grokTokens: 0, kiroUSD: 0, kiroTokens: 0,
+            ompUSD: 0, ompTokens: 0, piUSD: 0, piTokens: 0,
+            devinUSD: 0, devinTokens: 0,
+            extras: [
+                "antigravity": SourceUsageSlice(usd: 2, tokens: 200),
+                "gemini": SourceUsageSlice(usd: 7, tokens: 700),
+            ])
 
-    func testAntigravityAccountCardFallsBackWhenNoOAuthAccountsExist() {
-        XCTAssertFalse(AntigravityAccountQuotaPresentation.usesAccountCard(accountCount: 0))
-        XCTAssertTrue(AntigravityAccountQuotaPresentation.usesAccountCard(accountCount: 1))
-    }
+        let forecast = BudgetForecast.build(
+            daily: [day], budgetUSD: 10, period: .month, source: .antigravity,
+            now: now, calendar: calendar)
 
-    func testAntigravityAccountDisplayNameKeepsDomainDistinct() {
-        let work = AntigravityOAuthStore.Account(
-            label: "work", email: "alex@work.com", refreshToken: "work-token")
-        let personal = AntigravityOAuthStore.Account(
-            label: "personal", email: "alex@gmail.com", refreshToken: "personal-token")
-
-        XCTAssertEqual(
-            AntigravityAccountQuotaPresentation.displayName(for: work), "alex@work.com")
-        XCTAssertEqual(
-            AntigravityAccountQuotaPresentation.displayName(for: personal), "alex@gmail.com")
-    }
-
-    func testAntigravityAccountMustRemainAuthorizedBeforeSnapshotSave() {
-        let account = agAccount("a@x.com")
-        XCTAssertTrue(AntigravityAccountSnapshotRefresher.accountStillAuthorized(
-            account,
-            in: AntigravityOAuthStore.Store(accounts: [account]),
-            resolvedRefreshToken: "isolated-token",
-            usedRefreshToken: "isolated-token"))
-        XCTAssertFalse(AntigravityAccountSnapshotRefresher.accountStillAuthorized(
-            account,
-            in: AntigravityOAuthStore.Store(accounts: []),
-            resolvedRefreshToken: "isolated-token",
-            usedRefreshToken: "isolated-token"))
-        XCTAssertFalse(AntigravityAccountSnapshotRefresher.accountStillAuthorized(
-            account,
-            in: AntigravityOAuthStore.Store(accounts: [account]),
-            resolvedRefreshToken: nil,
-            usedRefreshToken: "isolated-token"))
-        XCTAssertFalse(AntigravityAccountSnapshotRefresher.accountStillAuthorized(
-            account,
-            in: AntigravityOAuthStore.Store(accounts: [account]),
-            resolvedRefreshToken: "rotated-token",
-            usedRefreshToken: "isolated-token"))
-    }
-
-    func testAntigravityStaleAccountsIncludeNeverFetchedAccount() {
-        let now = Date()
-        let cached: [String: Date] = ["a@x.com": now]
-        let due = AntigravityAccountSnapshotRefresher.staleAccounts(
-            accounts: [agAccount("a@x.com"), agAccount("b@x.com")],
-            now: now,
-            cachedAt: { cached[$0] })
-        XCTAssertEqual(due.map(\.label), ["b@x.com"])
-    }
-
-    func testAntigravityStaleAccountsReturnsEveryAgedOutAccount() {
-        let now = Date()
-        let old = now.addingTimeInterval(-AntigravityAccountSnapshotRefresher.maxSnapshotAge - 1)
-        let cached: [String: Date] = ["a@x.com": old, "b@x.com": old]
-        let due = AntigravityAccountSnapshotRefresher.staleAccounts(
-            accounts: [agAccount("a@x.com"), agAccount("b@x.com")],
-            now: now,
-            cachedAt: { cached[$0] })
-        XCTAssertEqual(due.map(\.label), ["a@x.com", "b@x.com"])
-    }
-
-    func testAntigravityStaleAccountsSkipsFreshSnapshots() {
-        let now = Date()
-        let fresh = now.addingTimeInterval(-AntigravityAccountSnapshotRefresher.maxSnapshotAge + 1)
-        let cached: [String: Date] = ["a@x.com": fresh, "b@x.com": fresh]
-        XCTAssertTrue(
-            AntigravityAccountSnapshotRefresher.staleAccounts(
-                accounts: [agAccount("a@x.com"), agAccount("b@x.com")],
-                now: now,
-                cachedAt: { cached[$0] }).isEmpty)
+        XCTAssertEqual(forecast.periodToDateUSD, 2, accuracy: 0.0001)
     }
 
     // MARK: - CommandCode: balance is not a quota
