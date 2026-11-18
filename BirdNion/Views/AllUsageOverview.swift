@@ -732,7 +732,7 @@ enum BudgetForecastStatus: Equatable {
 typealias MonthlyForecastStatus = BudgetForecastStatus
 
 enum CombinedUsageSource: Equatable {
-    case total, claude, codex, grok, kiro, omp, pi, devin
+    case total, claude, codex, grok, kiro, omp, pi, devin, antigravity
 }
 
 struct BudgetForecast: Equatable {
@@ -838,6 +838,7 @@ struct BudgetForecast: Equatable {
         case .omp: return day.ompUSD
         case .pi: return day.piUSD
         case .devin: return day.devinUSD
+        case .antigravity: return day.extras[CostHistoryStore.Source.antigravity.rawValue]?.usd ?? 0
         }
     }
 }
@@ -2149,6 +2150,7 @@ struct DayDetailPanelRoot: View {
         case "omp": return AnyShapeStyle(VocabbyTheme.chartOMPBar())
         case "pi": return AnyShapeStyle(VocabbyTheme.chartPi)
         case "devin": return AnyShapeStyle(VocabbyTheme.devin)
+        case "antigravity": return AnyShapeStyle(VocabbyTheme.antigravity)
         default: return AnyShapeStyle(VocabbyTheme.chartCodex)
         }
     }

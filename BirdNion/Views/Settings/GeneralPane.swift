@@ -203,6 +203,10 @@ struct GeneralPane: View {
                 perProviderBudgetRow(
                     title: L10n.t("settings.piBudget.title", settings.appLanguage),
                     value: $settings.piMonthlyBudgetUSD)
+                SettingsRowDivider()
+                perProviderBudgetRow(
+                    title: L10n.t("settings.antigravityBudget.title", settings.appLanguage),
+                    value: $settings.antigravityMonthlyBudgetUSD)
             }
 
             SettingsCard(header: L10n.t("settings.section.notifications", settings.appLanguage)) {

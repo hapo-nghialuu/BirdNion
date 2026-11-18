@@ -17,7 +17,7 @@ enum AntigravityCostSource {
     static let descriptor = LocalCostSource(
         source: .antigravity,
         displayName: "Antigravity",
-        countingRevision: 1,
+        countingRevision: 2,
         roots: { AntigravityCostSource.dataRoots() },
         turnReader: { roots, cutoff in
             AntigravityCostSource.turns(roots: roots, cutoff: cutoff)
@@ -56,20 +56,21 @@ enum AntigravityCostSource {
             let model = turn.model ?? "unknown"
             return LocalTurnRecord(
                 date: date, model: model, tokens: total,
-                usd: cost(model: model, input: input, cacheRead: usage.cacheRead,
+                usd: cost(model: model, date: date, input: input, cacheRead: usage.cacheRead,
                           output: usage.output + usage.reasoning),
                 dedupeKey: "agv:\(session):\(row.idx)")
         }
     }
 
-    private static func cost(model: String, input: Int, cacheRead: Int, output: Int) -> Double {
+    private static func cost(model: String, date: Date, input: Int, cacheRead: Int, output: Int) -> Double {
         let m = model.lowercased()
         if m.contains("claude"), let price = ClaudeModelPrice.price(for: m) {
             return (Double(input) * price.inputPerM
                 + Double(cacheRead) * price.cacheReadPerM
                 + Double(output) * price.outputPerM) / 1_000_000
         }
-        if m.contains("gemini"), let price = GeminiModelPrice.price(for: m) {
+        if m.contains("gemini"),
+           let price = GeminiModelPrice.price(for: m, on: date, promptTokens: input + cacheRead) {
             return (Double(input) * price.inputPerM
                 + Double(cacheRead) * price.cachedPerM
                 + Double(output) * price.outputPerM) / 1_000_000

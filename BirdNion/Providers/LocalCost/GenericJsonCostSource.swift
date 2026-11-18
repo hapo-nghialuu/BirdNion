@@ -5,7 +5,8 @@ import Foundation
 /// `GeminiModelPrice`, everything else counts tokens at $0.
 enum LocalCostPricing {
     static func estimate(
-        model: String, input: Int, cacheRead: Int, cacheWrite: Int, output: Int
+        model: String, input: Int, cacheRead: Int, cacheWrite: Int, output: Int,
+        date: Date = Date()
     ) -> Double {
         let m = model.lowercased()
         if m.contains("claude"), let price = ClaudeModelPrice.price(for: m) {
@@ -13,7 +14,9 @@ enum LocalCostPricing {
                 + Double(cacheRead) * price.cacheReadPerM
                 + Double(output) * price.outputPerM) / 1_000_000
         }
-        if m.contains("gemini"), let price = GeminiModelPrice.price(for: m) {
+        if m.contains("gemini"),
+           let price = GeminiModelPrice.price(
+               for: m, on: date, promptTokens: input + cacheRead + cacheWrite) {
             return (Double(input + cacheWrite) * price.inputPerM
                 + Double(cacheRead) * price.cachedPerM
                 + Double(output) * price.outputPerM) / 1_000_000
@@ -88,7 +91,7 @@ enum GenericJsonCostSource {
                 date: date, model: model, tokens: tokens.total,
                 usd: LocalCostPricing.estimate(
                     model: model, input: tokens.input, cacheRead: tokens.cacheRead,
-                    cacheWrite: tokens.cacheWrite, output: tokens.output),
+                    cacheWrite: tokens.cacheWrite, output: tokens.output, date: date),
                 dedupeKey: "\(dedupePrefix):\(ordinal)"))
         }
         return out

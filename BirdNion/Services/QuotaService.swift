@@ -69,12 +69,6 @@ final class QuotaService: ObservableObject {
     /// Per-provider in-flight set — powers the per-card refresh indicator.
     @Published private(set) var fetchingIDs: Set<String> = []
 
-    /// Bumped when the background per-account Antigravity refresh stores a new
-    /// snapshot. The popover's all-accounts card reads `AccountSnapshotStore`
-    /// directly — SwiftUI cannot observe that file, so this publish is what
-    /// puts the freshly fetched rows on screen.
-    @Published private(set) var accountSnapshotsRevision: Int = 0
-
     /// Always-fully-populated status array used by the popover UI. Contains
     /// one entry per provider in `providers`, even if a fetch is still
     /// in-flight — missing entries get a placeholder so the tabs + cards
@@ -131,8 +125,6 @@ final class QuotaService: ObservableObject {
     private var loopTask: Task<Void, Never>?
     private var notificationObservers: [NSObjectProtocol] = []
     private var refreshPassIsRunning = false
-    private var antigravityAccountRefreshTask: Task<Void, Never>?
-    private var antigravityAccountRefreshGeneration: UInt = 0
     private var pendingRefreshRequested = false
     private var pendingForceProviderIDs: Set<String> = []
     private var refreshWaiters: [CheckedContinuation<Void, Never>] = []
@@ -315,12 +307,6 @@ final class QuotaService: ObservableObject {
         let keep = Set(newProviders.map(\.id))
         let removedIDs = Set(providers.map(\.id)).subtracting(keep)
         removedIDs.forEach(cleanupRemovedProvider)
-        if let current = providers.first(where: { $0.id == "antigravity" }),
-           let replacement = newProviders.first(where: { $0.id == "antigravity" }),
-           ObjectIdentifier(current) != ObjectIdentifier(replacement)
-        {
-            cancelAntigravityAccountSnapshotRefresh()
-        }
         providers = newProviders
         scheduler.configure(providers: providers)
         statuses = statuses.filter { keep.contains($0.id) }
@@ -370,9 +356,6 @@ final class QuotaService: ObservableObject {
     }
 
     private func cleanupRemovedProvider(_ id: String) {
-        if id == "antigravity" {
-            cancelAntigravityAccountSnapshotRefresh()
-        }
         failureNotificationRemove(Self.failureNotificationID(for: id))
         legacyFailureNotificationCleanup(id)
         failureEpisode.removeValue(forKey: id)
@@ -477,7 +460,6 @@ final class QuotaService: ObservableObject {
         loopTask?.cancel()
         loopTask = nil
         scheduler.cancelAll()
-        cancelAntigravityAccountSnapshotRefresh()
         settingsRefreshTask?.cancel()
         settingsRefreshTask = nil
         pendingSettingsRefreshProviderIDs.removeAll()
@@ -626,8 +608,7 @@ final class QuotaService: ObservableObject {
     /// context are cleared so last-good data never crosses identities.
     func invalidateProviderContext(for providerID: String) {
         if providerID == "antigravity" {
-            cancelAntigravityAccountSnapshotRefresh()
-        }
+            }
         // Lane-side: generation bump + cadence/gate/state reset + cleanup hook.
         scheduler.lane(for: providerID)?.invalidateContext()
         statuses.removeAll { $0.id == providerID }
@@ -758,47 +739,8 @@ final class QuotaService: ObservableObject {
             log.info("refresh done — total=\(String(format: "%.2f", total), privacy: .public)s slow=\(sortedByDuration.filter { $0.1 > 2.0 }.count, privacy: .public)")
         }
         persistStatuses()
-        scheduleAntigravityAccountSnapshotRefresh()
         await runWeeklyDigestIfDue()
         syncFetchingState()
-    }
-
-    /// Tops up the popover's all-accounts Antigravity card in the background.
-    /// The pass above only probes the ACTIVE account, so every other account
-    /// would read "no data" until the user switched to it. Deliberately NOT
-    /// awaited: it makes three HTTPS round trips per account and must not hold
-    /// up the refresh pass. Coalesced — never more than one in flight.
-    private func scheduleAntigravityAccountSnapshotRefresh() {
-        guard antigravityAccountRefreshTask == nil,
-              let provider = providers.first(where: { $0.id == "antigravity" })
-                  as? AntigravityProvider,
-              let lane = scheduler.lane(for: provider.id)
-        else { return }
-        let providerIdentity = ObjectIdentifier(provider)
-        let contextGeneration = lane.contextGeneration
-        antigravityAccountRefreshGeneration &+= 1
-        let refreshGeneration = antigravityAccountRefreshGeneration
-        antigravityAccountRefreshTask = Task { [weak self] in
-            let stored = await AntigravityAccountSnapshotRefresher
-                .refreshStaleAccounts(provider: provider)
-            guard let self,
-                  refreshGeneration == antigravityAccountRefreshGeneration
-            else { return }
-            antigravityAccountRefreshTask = nil
-            guard !Task.isCancelled,
-                  scheduler.lane(for: provider.id)?.contextGeneration == contextGeneration,
-                  providers.contains(where: {
-                      $0.id == provider.id && ObjectIdentifier($0) == providerIdentity
-                  })
-            else { return }
-            if stored { accountSnapshotsRevision &+= 1 }
-        }
-    }
-
-    private func cancelAntigravityAccountSnapshotRefresh() {
-        antigravityAccountRefreshGeneration &+= 1
-        antigravityAccountRefreshTask?.cancel()
-        antigravityAccountRefreshTask = nil
     }
 
     // MARK: - Weekly Digest (rolling 7-day cost/token summary notification)

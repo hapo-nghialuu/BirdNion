@@ -14,7 +14,7 @@ enum GooseCostSource {
     static let descriptor = LocalCostSource(
         source: .goose,
         displayName: "Goose",
-        countingRevision: 2,
+        countingRevision: 3,
         roots: { GooseCostSource.dataRoots() },
         turnReader: { roots, cutoff in
             GooseCostSource.turns(roots: roots, cutoff: cutoff)
@@ -82,7 +82,7 @@ enum GooseCostSource {
                 date: date, model: model, tokens: total,
                 usd: LocalCostPricing.estimate(
                     model: model, input: input, cacheRead: 0,
-                    cacheWrite: 0, output: output + extra),
+                    cacheWrite: 0, output: output + extra, date: date),
                 dedupeKey: "goose:\(url.path):\(sqlite3_column_int64(statement, 0))"))
         }
         return out

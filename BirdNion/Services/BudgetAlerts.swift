@@ -29,6 +29,7 @@ enum BudgetAlerts {
         case .kiro: "kiroBudgetUSD"
         case .omp: "ompBudgetUSD"
         case .pi: "piBudgetUSD"
+        case .antigravity: "antigravityBudgetUSD"
         default: nil
         }
     }

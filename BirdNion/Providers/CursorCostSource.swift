@@ -12,7 +12,7 @@ enum CursorCostSource {
     static let descriptor = LocalCostSource(
         source: .cursor,
         displayName: "Cursor",
-        countingRevision: 2,
+        countingRevision: 3,
         roots: { CursorCostSource.dataRoots() },
         turnReader: { roots, cutoff in
             CursorCostSource.turns(roots: roots, cutoff: cutoff)

@@ -9,7 +9,7 @@ enum DroidCostSource {
     static let descriptor = LocalCostSource(
         source: .droid,
         displayName: "Droid",
-        countingRevision: 2,
+        countingRevision: 3,
         roots: { DroidCostSource.dataRoots() },
         turnReader: { roots, cutoff in
             GenericJsonCostSource.turns(
