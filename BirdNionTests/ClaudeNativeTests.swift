@@ -559,6 +559,50 @@ final class ClaudeNativeTests: XCTestCase {
         XCTAssertLessThan(Date().timeIntervalSince(lockedStarted), 5, "locked keychain must not wait on a dialog")
     }
 
+    // MARK: - OAuth credential ownership
+
+    /// Claude Code owns its refresh token. Spending it here rotates it on the
+    /// server, so Claude Code's stored copy stops working and it signs the
+    /// account out. An expired credential must come back untouched, no request.
+    func testExpiredCredentialIsNotRefreshedWithClaudeCodesRefreshToken() async throws {
+        let home = FileManager.default.temporaryDirectory
+            .appendingPathComponent("claude-oauth-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: home) }
+        let file = home.appendingPathComponent(ClaudeOAuthStore.credentialsRelativePath)
+        try FileManager.default.createDirectory(
+            at: file.deletingLastPathComponent(), withIntermediateDirectories: true)
+        let expiredMs = Int((Date().timeIntervalSince1970 - 3600) * 1000)
+        try Data("""
+        {"claudeAiOauth":{"accessToken":"old-access","refreshToken":"claude-code-refresh",\
+        "expiresAt":\(expiredMs),"scopes":["user:profile"]}}
+        """.utf8).write(to: file)
+
+        StubURLProtocol.reset()
+        defer { StubURLProtocol.reset() }
+        StubURLProtocol.handler = { request in
+            let isRefresh = request.url?.path.hasSuffix("/oauth/token") == true
+            let body = isRefresh
+                ? #"{"access_token":"new-access","refresh_token":"rotated","expires_in":28800}"#
+                : #"{"error":"expired"}"#
+            return (HTTPURLResponse(url: request.url!, statusCode: isRefresh ? 200 : 401,
+                                    httpVersion: nil, headerFields: nil)!, Data(body.utf8))
+        }
+        let config = URLSessionConfiguration.ephemeral
+        config.protocolClasses = [StubURLProtocol.self]
+
+        do {
+            _ = try await ClaudeOAuthUsageAPI.loadSnapshot(
+                session: URLSession(configuration: config),
+                environment: ["HOME": home.path], allowKeychainPrompt: false)
+            XCTFail("an expired token must surface the usage 401, not a refreshed snapshot")
+        } catch {}
+
+        XCTAssertEqual(StubURLProtocol.requestCount, 1, "only the usage call; no refresh grant")
+        XCTAssertEqual(StubURLProtocol.lastRequest?.url, ClaudeOAuthUsageAPI.endpoint)
+        XCTAssertEqual(StubURLProtocol.lastRequest?.value(forHTTPHeaderField: "Authorization"),
+                       "Bearer old-access")
+    }
+
     // MARK: - OAuth usage mapping
 
     func testMapOAuthUsageWindowsCostRoutines() throws {
