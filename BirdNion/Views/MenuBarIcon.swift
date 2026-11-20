@@ -23,6 +23,10 @@ enum MenuBarIconRenderer {
         /// display-mode picker uses this to show credits / used÷total / overage
         /// instead of percent).
         case provider(id: String, name: String, percents: [Int], text: String?)
+        /// A provider's spend readout (e.g. "$4.20/$20") from its
+        /// `ProviderCostSnapshot`. Only emitted when `MenuBarShowSpend` is on
+        /// and the provider reports a cost budget or nonzero spend.
+        case spend(id: String, name: String, text: String)
     }
 
     enum PercentTitleLayout {
@@ -72,12 +76,112 @@ enum MenuBarIconRenderer {
         }
     }
 
+    /// Compact label for a quota window shown before its percent when
+    /// `MenuBarShowWindowLabels` is on ("5h 91%"). Derived from the window
+    /// length so provider-specific labels stay out of the menu bar.
+    static func shortWindowLabel(_ window: QuotaWindow) -> String {
+        guard let seconds = window.windowSeconds, seconds > 0 else {
+            return String(window.label.prefix(3))
+        }
+        let hours = Double(seconds) / 3600
+        if hours <= 23 { return "\(Int(hours.rounded()))h" }
+        let days = seconds / (24 * 3600)
+        if days <= 8 { return "Wk" }
+        if days <= 32 { return "Mo" }
+        return "\(days)d"
+    }
+
+    /// Graphical progress-bar frame (`MenuBarLayoutStyle` `bar` /
+    /// `barAndPercent`): one bar per window, filled to `remainingPct`,
+    /// provider logo on the right. Rendered as a template image like
+    /// `stackedProviderImage` so AppKit tints it correctly per appearance.
+    static func meteredProviderImage(
+        for id: String,
+        percents: [Int],
+        style: MenuBarLayoutStyle,
+        text: String? = nil
+    ) -> NSImage {
+        // Single-window bars share the inline-title point size so adjacent
+        // percent/spend frames don't jump between font sizes; two stacked
+        // rows keep the compact stacked size.
+        let rows = Array(percents.prefix(2))
+        let pointSize: CGFloat = rows.count > 1
+            ? (MenuBarLargeText.isEnabled ? 11 : stackedTitleFontSize)
+            : (MenuBarLargeText.isEnabled ? 15 : 12)
+        let font = NSFont.monospacedDigitSystemFont(
+            ofSize: pointSize,
+            weight: .semibold)
+        let attributes: [NSAttributedString.Key: Any] = [
+            .font: font,
+            .foregroundColor: NSColor.controlTextColor,
+        ]
+        // `text` carries the caller's label line (window labels "5h 91%  Wk
+        // 42%" or a display-mode string like Kiro's credits). Split on the
+        // double-space row separator; fall back to bare percents per row.
+        let provided = (text?.isEmpty == false)
+            ? text!.components(separatedBy: "  ") : nil
+        let labels = rows.enumerated().map { index, pct in
+            if let provided, index < provided.count { return provided[index] }
+            return "\(max(0, min(100, pct)))%"
+        }
+        let drawText = style == .barAndPercent || provided != nil
+        let textWidth = drawText
+            ? ceil(max(1, labels.map { ($0 as NSString).size(withAttributes: attributes).width }.max() ?? 1))
+            : 0
+        let logoSize = providerLogoPointSize(for: id)
+        let barWidth: CGFloat = MenuBarLargeText.isEnabled ? 30 : 24
+        let targetSize = NSSize(
+            width: textWidth + (drawText ? 2 : 0) + barWidth + stackedProviderLogoGap + logoSize,
+            height: stackedProviderImageHeight)
+        let image = NSImage(size: targetSize)
+
+        image.lockFocus()
+        NSGraphicsContext.current?.imageInterpolation = .high
+        let barHeight: CGFloat = rows.count > 1 ? 4 : 7
+        let barX = textWidth + (drawText ? 2 : 0)
+        let lineHeight = ceil(font.ascender - font.descender)
+        for (index, pct) in rows.enumerated() {
+            let rowY: CGFloat = index == 0
+                ? (rows.count > 1 ? targetSize.height - barHeight - 1 : (targetSize.height - barHeight) / 2)
+                : 1
+            let barRect = NSRect(x: barX, y: rowY, width: barWidth, height: barHeight)
+            let track = NSBezierPath(roundedRect: barRect, xRadius: barHeight / 2, yRadius: barHeight / 2)
+            NSColor.controlTextColor.withAlphaComponent(0.22).setFill()
+            track.fill()
+            let clamped = CGFloat(max(0, min(100, pct))) / 100
+            let fillWidth = max(barHeight, barWidth * clamped)
+            let fillRect = NSRect(x: barX, y: rowY, width: fillWidth, height: barHeight)
+            NSColor.controlTextColor.setFill()
+            NSBezierPath(roundedRect: fillRect, xRadius: barHeight / 2, yRadius: barHeight / 2).fill()
+            if drawText {
+                let text = labels[index] as NSString
+                let textY = index == 0
+                    ? (rows.count > 1 ? targetSize.height - lineHeight - 1 : (targetSize.height - lineHeight) / 2)
+                    : 1
+                text.draw(at: NSPoint(x: 0, y: textY), withAttributes: attributes)
+            }
+        }
+        let logo = providerLogo(for: id, pointSize: logoSize)
+        logo.draw(
+            in: NSRect(
+                x: barX + barWidth + stackedProviderLogoGap,
+                y: (targetSize.height - logoSize) / 2,
+                width: logoSize,
+                height: logoSize),
+            from: NSRect(origin: .zero, size: logo.size),
+            operation: .sourceOver,
+            fraction: 1)
+        image.unlockFocus()
+        image.isTemplate = true
+        return image
+    }
+
     /// Render the exact-two-value provider frame as one template image. This
     /// avoids AppKit's relaunch-dependent multiline title positioning while
     /// keeping the native status-button cell for all other frames.
     static func stackedProviderImage(for id: String, percents: [Int]) -> NSImage {
         let font = NSFont.monospacedDigitSystemFont(
-            ofSize: stackedTitleFontSize, weight: .semibold)
+            ofSize: MenuBarLargeText.isEnabled ? 11 : stackedTitleFontSize, weight: .semibold)
         let attributes: [NSAttributedString.Key: Any] = [
             .font: font,
             .foregroundColor: NSColor.controlTextColor,
@@ -125,20 +229,85 @@ enum MenuBarIconRenderer {
     static func frames(
         from statuses: [ProviderStatus],
         showPercent: Bool = MenuBarPercentDisplay.isEnabled,
-        visibility: (String) -> Bool = { MenuBarVisibility.isShown(providerId: $0) }
+        visibility: (String) -> Bool = { MenuBarVisibility.isShown(providerId: $0) },
+        now: Date = Date()
     ) -> [Frame] {
         guard showPercent else { return [.bird] }
-        let frames = providerFrames(from: statuses, visibility: visibility)
+        let frames = providerFrames(from: statuses, visibility: visibility, now: now)
+            + spendFrames(from: statuses, visibility: visibility)
         return frames.isEmpty ? [.bird] : frames
+    }
+
+    /// One resolved provider frame plus the quota windows that produced it.
+    /// The windows are retained so ordering can rank by depletion risk.
+    private struct ResolvedFrame {
+        let frame: Frame
+        let windows: [QuotaWindow]
     }
 
     static func providerFrames(
         from statuses: [ProviderStatus],
+        visibility: (String) -> Bool = { MenuBarVisibility.isShown(providerId: $0) },
+        now: Date = Date()
+    ) -> [Frame] {
+        let resolved = statuses.compactMap { menuBarFrame(from: $0, visibility: visibility) }
+        if MenuBarSortByDepletion.isEnabled {
+            return resolved
+                .sorted { riskKey($0.windows, now: now) > riskKey($1.windows, now: now) }
+                .map(\.frame)
+        }
+        return resolved.map(\.frame).sorted(by: menuBarFrameSort)
+    }
+
+    /// Optional Spend items (CodexBar's menu-bar Spend tokens): one frame per
+    /// provider that reports a `ProviderCostSnapshot` with spend or a budget.
+    static func spendFrames(
+        from statuses: [ProviderStatus],
         visibility: (String) -> Bool = { MenuBarVisibility.isShown(providerId: $0) }
     ) -> [Frame] {
-        statuses
-            .compactMap { menuBarFrame(from: $0, visibility: visibility) }
-            .sorted(by: menuBarFrameSort)
+        guard MenuBarShowSpend.isEnabled else { return [] }
+        return statuses.compactMap { status -> Frame? in
+            guard visibility(status.id), let cost = status.cost else { return nil }
+            // Only true budget consumption in a real currency: `used > 0`
+            // against a `limit` (rules out Zen-style balances reported as
+            // used/limit=0) and an ISO-style code (rules out MiniMax "pts").
+            guard cost.limit > 0, cost.used >= 0, isCurrencyCode(cost.currencyCode) else { return nil }
+            return .spend(id: status.id, name: status.displayName, text: spendText(cost))
+        }.sorted(by: menuBarFrameSort)
+    }
+
+    private static func isCurrencyCode(_ code: String) -> Bool {
+        code.count == 3 && code == code.uppercased() && code.allSatisfy(\.isLetter)
+    }
+
+    private static func spendText(_ cost: ProviderCostSnapshot) -> String {
+        let unit = cost.currencyCode == "USD" ? "$" : "\(cost.currencyCode) "
+        let used = spendNumber(cost.used)
+        guard cost.limit > 0 else { return "\(unit)\(used)" }
+        return "\(unit)\(used)/\(unit)\(spendNumber(cost.limit))"
+    }
+
+    private static func spendNumber(_ value: Double) -> String {
+        if value >= 100 { return String(format: "%.0f", value) }
+        if value == value.rounded() { return String(format: "%.0f", value) }
+        return String(format: "%.2f", value)
+    }
+
+    /// CodexBar's depletion-risk ordering for Auto quotas: exhausted windows
+    /// first, then the window whose current pace depletes before its reset
+    /// (soonest ETA first), then the highest used percentage.
+    private static func riskKey(_ windows: [QuotaWindow], now: Date) -> (tier: Int, negEta: Double, usedPct: Int) {
+        // Rank only the windows the frame actually displays: special paths
+        // keep hidden supplementary/inactive windows (e.g. FreeModel bonus
+        // balances) in `windows`, and those must not drive the ordering.
+        let shown = windows.filter { !$0.isSupplementary && !$0.isInactive }
+        return (shown.isEmpty ? windows : shown).map { window -> (Int, Double, Int) in
+            if window.usedPct >= 100 || window.remainingPct <= 0 { return (2, 0, window.usedPct) }
+            if let eta = WindowPace(window: window, now: now)?.etaSeconds {
+                return (1, -eta, window.usedPct)
+            }
+            return (0, 0, window.usedPct)
+        }.max { ($0.0, $0.1, $0.2) < ($1.0, $1.1, $1.2) } ?? (0, 0, 0)
     }
 
     /// Active frames sort before idle full-quota ones; ties break A→Z by name.
@@ -159,6 +328,10 @@ enum MenuBarIconRenderer {
         case let .provider(_, _, percents, _):
             // remaining under 100 ⇔ used over 0 for the usual 0…100 clamp.
             return percents.contains { $0 < 100 }
+        case .spend:
+            // A spend frame only exists when there is spend or a budget to
+            // show — its presence already means the provider is in use.
+            return true
         }
     }
 
@@ -166,13 +339,14 @@ enum MenuBarIconRenderer {
         switch frame {
         case .bird: return ""
         case let .provider(_, name, _, _): return name
+        case let .spend(_, name, _): return name
         }
     }
 
     private static func menuBarFrame(
         from status: ProviderStatus,
         visibility: (String) -> Bool
-    ) -> Frame? {
+    ) -> ResolvedFrame? {
         guard visibility(status.id) else { return nil }
         let codexMetric = status.id == "codex" ? CodexMenuBarMetric.current : nil
         let windows: [QuotaWindow]
@@ -190,6 +364,17 @@ enum MenuBarIconRenderer {
             : nil
         if text == "" { return nil }
 
+        /// Bakes the optional per-window label prefix ("5h 91%") into `text`
+        /// when `MenuBarShowWindowLabels` is on. Only applied where the
+        /// percent-to-window mapping is known 1:1.
+        func labeledTitle(percents: [Int], windows: [QuotaWindow]) -> String? {
+            guard MenuBarShowWindowLabels.isEnabled,
+                  percents.count == windows.count else { return nil }
+            return zip(windows, percents).map { window, pct in
+                "\(shortWindowLabel(window)) \(max(0, min(100, pct)))%"
+            }.joined(separator: "  ")
+        }
+
         // Use the new generic resolver for all providers except Kiro (which has its own mode)
         // and providers with special logic (Codex, Antigravity, FreeModel).
         if status.id == "kiro" || status.id == "freemodel" || status.id == "antigravity" {
@@ -204,7 +389,9 @@ enum MenuBarIconRenderer {
 
             if pref == .average {
                 let avg = windows.map(\.remainingPct).reduce(0, +) / max(1, windows.count)
-                return .provider(id: status.id, name: status.displayName, percents: [avg], text: L10n.f("menuBar.avg", nil, "\(avg)"))
+                return ResolvedFrame(
+                    frame: .provider(id: status.id, name: status.displayName, percents: [avg], text: L10n.f("menuBar.avg", nil, "\(avg)")),
+                    windows: windows)
             }
 
             let canonicalAutomaticWindows: [QuotaWindow]
@@ -237,7 +424,11 @@ enum MenuBarIconRenderer {
             if let selectedWindows {
                 let percents = selectedWindows.map(\.remainingPct)
                 guard !percents.isEmpty else { return nil }
-                return .provider(id: status.id, name: status.displayName, percents: percents, text: nil)
+                return ResolvedFrame(
+                    frame: .provider(
+                        id: status.id, name: status.displayName, percents: percents,
+                        text: labeledTitle(percents: percents, windows: selectedWindows)),
+                    windows: selectedWindows)
             }
             return nil
         }
@@ -253,12 +444,14 @@ enum MenuBarIconRenderer {
             percents = windows.map { $0.remainingPct }
         }
         guard !percents.isEmpty else { return nil }
-        return .provider(
-            id: status.id,
-            name: status.displayName,
-            percents: percents,
-            text: text
-        )
+        return ResolvedFrame(
+            frame: .provider(
+                id: status.id,
+                name: status.displayName,
+                percents: percents,
+                text: text
+            ),
+            windows: windows)
     }
 
     /// Automatic preserves Antigravity's original single representative.
@@ -547,6 +740,56 @@ enum MenuBarIconRenderer {
         out.isTemplate = isTemplate
         return out
     }
+}
+
+// MARK: - Menu-bar layout options (CodexBar layout-display parity)
+
+/// How provider quota is drawn in the menu bar, persisted under `defaultsKey`.
+/// CodexBar exposes a full layout editor; BirdNion's rotating frame model gets
+/// the equivalent as a style picker.
+enum MenuBarLayoutStyle: String, CaseIterable, Identifiable {
+    case percent
+    case bar
+    case barAndPercent
+
+    static let defaultsKey = "menuBarLayoutStyle"
+    var id: String { rawValue }
+
+    static var current: MenuBarLayoutStyle {
+        MenuBarLayoutStyle(rawValue: UserDefaults.standard.string(forKey: defaultsKey) ?? "") ?? .percent
+    }
+
+    func label(language: String) -> String {
+        L10n.t("settings.menuBarStyle.\(rawValue)", language)
+    }
+}
+
+/// Show provider spend (ProviderCostSnapshot) as extra menu-bar frames
+/// (CodexBar's Spend items in menu-bar layouts).
+enum MenuBarShowSpend {
+    static let defaultsKey = "menuBarShowSpend"
+    static var isEnabled: Bool { UserDefaults.standard.bool(forKey: defaultsKey) }
+}
+
+/// Rank rotating provider frames by depletion risk instead of
+/// active-then-alphabetical (CodexBar's Auto-quota depletion ranking).
+enum MenuBarSortByDepletion {
+    static let defaultsKey = "menuBarSortByDepletion"
+    static var isEnabled: Bool { UserDefaults.standard.bool(forKey: defaultsKey) }
+}
+
+/// Prefix percents with a short window label — "5h 91%" instead of "91%"
+/// (the inverse of CodexBar's "show window labels" toggle, default off to
+/// keep the compact readout).
+enum MenuBarShowWindowLabels {
+    static let defaultsKey = "menuBarShowWindowLabels"
+    static var isEnabled: Bool { UserDefaults.standard.bool(forKey: defaultsKey) }
+}
+
+/// Larger menu-bar text / meter glyphs (CodexBar's "large text" option).
+enum MenuBarLargeText {
+    static let defaultsKey = "menuBarLargeText"
+    static var isEnabled: Bool { UserDefaults.standard.bool(forKey: defaultsKey) }
 }
 
 // MARK: - Kiro menu-bar display mode (mirrors CodexBar's KiroMenuBarDisplayMode)
