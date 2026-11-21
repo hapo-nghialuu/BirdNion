@@ -11,6 +11,9 @@ import CodexBarCore
 ///    a full `Authorization: Bearer ...` line) + optional Organization
 ///    (`devinOrganization`) — slug, internal `org-...`/`org_...` ID, or the
 ///    full `https://app.devin.ai/org/<slug>` URL.
+/// 3. **CLI fallback:** when the browser path fails and no manual token is
+///    set, the `devin auth login` key via `DevinCLIStatusFetcher`
+///    (daily/weekly percent + plan only, no usage history).
 ///
 /// Endpoint: `GET https://app.devin.ai/api/<org>/billing/quota/usage`
 /// → `DevinUsageSnapshot` (daily + weekly percentage windows + plan name).
@@ -39,6 +42,16 @@ final class DevinProvider: QuotaProvider {
                 accountLabel: accountLabel,
                 sourceLabel: token != nil ? "manual" : "auto")
         } catch {
+            // A manual token is an explicit choice; only the auto (browser)
+            // path falls back to the Devin CLI login.
+            if token == nil, let credentials = DevinCLIStatusFetcher.loadCredentials() {
+                do {
+                    let snap = try await DevinCLIStatusFetcher.fetch(credentials: credentials)
+                    return Self.map(snap, accountLabel: accountLabel, sourceLabel: "cli")
+                } catch {
+                    NSLog("[devin] CLI fallback failed: %@", Self.friendly(error))
+                }
+            }
             return failure(Self.friendly(error))
         }
     }
@@ -147,7 +160,7 @@ final class DevinProvider: QuotaProvider {
         if let e = error as? DevinUsageError {
             switch e {
             case .noSession:
-                return "Chưa đăng nhập Devin. Mở app.devin.ai → trang Usage & Limits trong Chrome, hoặc dán Bearer token."
+                return "Chưa đăng nhập Devin. Chạy `devin auth login`, mở app.devin.ai → trang Usage & Limits trong Chrome, hoặc dán Bearer token."
             case .missingOrganization:
                 return "Thiếu Devin Organization — nhập slug hoặc org-... ID, hoặc mở trang Usage & Limits của org đó trong Chrome."
             case .invalidCredentials:

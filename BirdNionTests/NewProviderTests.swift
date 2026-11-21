@@ -5594,6 +5594,70 @@ final class NewProviderTests: XCTestCase {
             ["/api/org-stale/billing/quota/usage", "/api/org/acme/billing/quota/usage"])
     }
 
+    func testDevinCLICredentialsParser() {
+        let toml = """
+        windsurf_api_key = "devin-abc123"
+        api_server_url = "https://server.codeium.com"
+        devin_webapp_host = "app.devin.ai"
+        """
+        let creds = DevinCLIStatusFetcher.parseCredentials(toml)
+        XCTAssertEqual(creds?.apiKey, "devin-abc123")
+        XCTAssertEqual(creds?.apiServerURL.absoluteString, "https://server.codeium.com")
+        XCTAssertNil(DevinCLIStatusFetcher.parseCredentials("api_server_url = \"https://x\""))
+        // Non-https server URLs are ignored so the key is never sent in clear text.
+        XCTAssertEqual(
+            DevinCLIStatusFetcher.parseCredentials(
+                "windsurf_api_key = \"k\"\napi_server_url = \"http://evil\"")?.apiServerURL,
+            DevinCLIStatusFetcher.defaultAPIServerURL)
+    }
+
+    /// GetUserStatus shape observed live on 2026-11-21 (Devin Max plan).
+    func testDevinCLIUserStatusParser() throws {
+        let json = """
+        {"userStatus":{"planStatus":{
+          "planInfo":{"planName":"Max","devinInfo":{"orgId":"org-1","accountDisplayName":"My Team"}},
+          "dailyQuotaRemainingPercent":75,
+          "weeklyQuotaResetAtUnix":"1795334400",
+          "dailyQuotaResetAtUnix":1795248000}}}
+        """
+        let snap = try DevinCLIStatusFetcher.parseUserStatus(Data(json.utf8))
+        XCTAssertEqual(snap.daily?.usedPercent, 25)
+        XCTAssertEqual(snap.daily?.resetsAt, Date(timeIntervalSince1970: 1_795_248_000))
+        // proto3 omits zero values: reset present + remaining absent = exhausted.
+        XCTAssertEqual(snap.weekly?.usedPercent, 100)
+        XCTAssertEqual(snap.weekly?.resetsAt, Date(timeIntervalSince1970: 1_795_334_400))
+        XCTAssertEqual(snap.planName, "Max")
+        XCTAssertEqual(snap.organization, "My Team")
+
+        XCTAssertThrowsError(try DevinCLIStatusFetcher.parseUserStatus(Data("{}".utf8)))
+        XCTAssertThrowsError(try DevinCLIStatusFetcher.parseUserStatus(
+            Data("{\"userStatus\":{\"planStatus\":{}}}".utf8)))
+    }
+
+    func testDevinCLIFetchMapsForbiddenToInvalidCredentials() async {
+        let transport = ProviderHTTPTransportHandler { request in
+            XCTAssertEqual(request.httpMethod, "POST")
+            XCTAssertTrue(request.url?.path.hasSuffix("SeatManagementService/GetUserStatus") == true)
+            // The live server rejects requests without these version fields (HTTP 400).
+            let body = try JSONSerialization.jsonObject(with: request.httpBody ?? Data()) as? [String: Any]
+            let metadata = body?["metadata"] as? [String: Any]
+            XCTAssertNotNil(metadata?["ideVersion"])
+            XCTAssertNotNil(metadata?["extensionVersion"])
+            let response = HTTPURLResponse(
+                url: request.url!, statusCode: 403, httpVersion: nil, headerFields: nil)!
+            return (Data(), response)
+        }
+        let creds = DevinCLIStatusFetcher.Credentials(
+            apiKey: "k", apiServerURL: DevinCLIStatusFetcher.defaultAPIServerURL)
+        do {
+            _ = try await DevinCLIStatusFetcher.fetch(credentials: creds, transport: transport)
+            XCTFail("expected invalidCredentials")
+        } catch DevinUsageError.invalidCredentials {
+        } catch {
+            XCTFail("unexpected \(error)")
+        }
+    }
+
     /// `billing/usage/daily-usage?cycle=current&view=all` — shape observed
     /// live on 2026-09-22: cycle bounds + per-day amount/cumulative rows +
     /// per-product totals. Parser must keep days, products and the total.
