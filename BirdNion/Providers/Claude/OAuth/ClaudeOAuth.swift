@@ -10,11 +10,11 @@ import Security
 //   2. ~/.claude/.credentials.json  (Claude Code's own credentials file)
 //   3. macOS Keychain item "Claude Code-credentials" (Security framework)
 //
-// When the resolved credential is expired and carries a refresh token, we run a
-// best-effort refresh-token grant in memory (never persisted — Claude Code stays
-// the source of truth for its keychain item, so we don't risk rotating its
-// refresh token out from under it). If the refresh fails (e.g. the token already
-// rotated), the caller falls through to a 401 and surfaces "re-authenticate".
+// BirdNion never spends Claude Code's refresh token. The server rotates it on
+// use, so a refresh here would leave Claude Code holding a dead token and it
+// would sign the account out. An expired credential is used as-is: the usage
+// fetch gets a 401 and the CLI source runs `claude`, which refreshes and stores
+// the token itself.
 
 /// Decoded Claude OAuth credentials. Mirrors CodexBarCore's
 /// `ClaudeOAuthCredentials` plus the `email` BirdNion surfaces as the account
@@ -83,7 +83,7 @@ struct ClaudeOAuthCredentials: Sendable {
     }
 }
 
-/// Resolves + refreshes Claude OAuth credentials.
+/// Resolves Claude OAuth credentials (read-only; Claude Code owns refresh).
 enum ClaudeOAuthStore {
     /// Follows the Claude Code account selected in BirdNion: each managed
     /// `CLAUDE_CONFIG_DIR` has its own hash-suffixed Keychain item.
@@ -91,20 +91,10 @@ enum ClaudeOAuthStore {
         ClaudeCLIAccountStore.keychainService(forConfigDir: ClaudeCLIAccountStore.activeConfigDir())
     }
     static let credentialsRelativePath = ".claude/.credentials.json"
-    static let defaultClientID = "9d1c250a-e61b-44d9-88ed-5944d1962f5e"
-    static let refreshEndpoint = URL(string: "https://platform.claude.com/v1/oauth/token")!
 
     // BirdNion-first env keys, with CodexBar's keys kept for users migrating.
     static let envTokenKeys = ["BIRDNION_CLAUDE_OAUTH_TOKEN", "CODEXBAR_CLAUDE_OAUTH_TOKEN"]
     static let envScopesKeys = ["BIRDNION_CLAUDE_OAUTH_SCOPES", "CODEXBAR_CLAUDE_OAUTH_SCOPES"]
-    static let envClientIDKeys = ["BIRDNION_CLAUDE_OAUTH_CLIENT_ID", "CODEXBAR_CLAUDE_OAUTH_CLIENT_ID"]
-
-    private static func clientID(_ env: [String: String]) -> String {
-        for key in envClientIDKeys {
-            if let v = env[key]?.trimmingCharacters(in: .whitespacesAndNewlines), !v.isEmpty { return v }
-        }
-        return defaultClientID
-    }
 
     // MARK: - Resolution
 
@@ -124,26 +114,6 @@ enum ClaudeOAuthStore {
             return creds
         }
         return nil
-    }
-
-    /// Resolves credentials and, if expired with a refresh token, attempts an
-    /// in-memory refresh-token grant. Never persists the refreshed token.
-    static func loadWithAutoRefresh(
-        session: URLSession = .shared,
-        environment: [String: String] = ProcessInfo.processInfo.environment,
-        allowKeychainPrompt: Bool) async -> ClaudeOAuthCredentials? {
-        guard let creds = loadCredentials(environment: environment, allowKeychainPrompt: allowKeychainPrompt)
-        else { return nil }
-        guard creds.isExpired, let refreshToken = creds.refreshToken, !refreshToken.isEmpty else {
-            return creds
-        }
-        if let refreshed = try? await refresh(
-            refreshToken: refreshToken, existing: creds, session: session, environment: environment) {
-            return refreshed
-        }
-        // Refresh failed (token already rotated, network, invalid_grant) — return
-        // the expired credential so the usage fetch surfaces a 401/re-auth hint.
-        return creds
     }
 
     // MARK: - Sources
@@ -377,68 +347,6 @@ enum ClaudeOAuthStore {
     /// `security` exits with the low byte of `errSecItemNotFound` (-25300).
     static let securityCLIItemNotFoundStatus: Int32 = 44
 
-    // MARK: - Refresh grant
-
-    private struct TokenRefreshResponse: Decodable {
-        let accessToken: String
-        let refreshToken: String?
-        let expiresIn: Int
-
-        enum CodingKeys: String, CodingKey {
-            case accessToken = "access_token"
-            case refreshToken = "refresh_token"
-            case expiresIn = "expires_in"
-        }
-    }
-
-    enum RefreshError: LocalizedError {
-        case http(Int)
-        case decode
-
-        var errorDescription: String? {
-            switch self {
-            case let .http(code): "Claude OAuth refresh HTTP \(code) — chạy `claude` để đăng nhập lại."
-            case .decode: "Claude OAuth refresh: phản hồi không hợp lệ."
-            }
-        }
-    }
-
-    /// POST refresh_token grant against platform.claude.com. Returns refreshed
-    /// credentials carrying the new access token (and rotated refresh token if
-    /// the server returned one). In-memory only — not persisted.
-    static func refresh(
-        refreshToken: String,
-        existing: ClaudeOAuthCredentials,
-        session: URLSession = .shared,
-        environment: [String: String] = ProcessInfo.processInfo.environment) async throws -> ClaudeOAuthCredentials {
-        var request = URLRequest(url: refreshEndpoint)
-        request.httpMethod = "POST"
-        request.timeoutInterval = 30
-        request.setValue("application/x-www-form-urlencoded", forHTTPHeaderField: "Content-Type")
-        request.setValue("application/json", forHTTPHeaderField: "Accept")
-        var components = URLComponents()
-        components.queryItems = [
-            URLQueryItem(name: "grant_type", value: "refresh_token"),
-            URLQueryItem(name: "refresh_token", value: refreshToken),
-            URLQueryItem(name: "client_id", value: clientID(environment)),
-        ]
-        request.httpBody = (components.percentEncodedQuery ?? "").data(using: .utf8)
-
-        let (data, response) = try await session.data(for: request)
-        let code = (response as? HTTPURLResponse)?.statusCode ?? 0
-        guard code == 200 else { throw RefreshError.http(code) }
-        guard let token = try? JSONDecoder().decode(TokenRefreshResponse.self, from: data) else {
-            throw RefreshError.decode
-        }
-        return ClaudeOAuthCredentials(
-            accessToken: token.accessToken,
-            refreshToken: token.refreshToken ?? refreshToken,
-            expiresAt: Date(timeIntervalSinceNow: TimeInterval(token.expiresIn)),
-            scopes: existing.scopes,
-            rateLimitTier: existing.rateLimitTier,
-            subscriptionType: existing.subscriptionType,
-            email: existing.email)
-    }
 }
 
 // MARK: - OAuth usage API
@@ -451,9 +359,10 @@ enum ClaudeOAuthUsageAPI {
 
     /// Resolves credentials then fetches + maps the usage payload.
     static func loadSnapshot(session: URLSession = .shared,
+                             environment: [String: String] = ProcessInfo.processInfo.environment,
                              allowKeychainPrompt: Bool) async throws -> ClaudeUsageSnapshot {
-        guard let creds = await ClaudeOAuthStore.loadWithAutoRefresh(
-                  session: session, allowKeychainPrompt: allowKeychainPrompt),
+        guard let creds = ClaudeOAuthStore.loadCredentials(
+                  environment: environment, allowKeychainPrompt: allowKeychainPrompt),
               !creds.accessToken.isEmpty else {
             throw ClaudeUsageError.oauthFailed("Chưa đăng nhập Claude — đăng nhập bằng Claude Code")
         }

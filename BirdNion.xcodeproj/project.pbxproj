@@ -41,6 +41,7 @@
 		DGP00001000000000000B01 /* DeepgramProvider.swift in Sources */ = {isa = PBXBuildFile; fileRef = DGP00002000000000000F01 /* DeepgramProvider.swift */; };
 		DVP00001000000000000B01 /* DevinProvider.swift in Sources */ = {isa = PBXBuildFile; fileRef = DVP00002000000000000F01 /* DevinProvider.swift */; };
 		DVP00003000000000000B01 /* DevinCostScanner.swift in Sources */ = {isa = PBXBuildFile; fileRef = DVP00004000000000000F01 /* DevinCostScanner.swift */; };
+		DVP00005000000000000B01 /* DevinCLIStatusFetcher.swift in Sources */ = {isa = PBXBuildFile; fileRef = DVP00006000000000000F01 /* DevinCLIStatusFetcher.swift */; };
 		GRP00001000000000000B01 /* GroqProvider.swift in Sources */ = {isa = PBXBuildFile; fileRef = GRP00002000000000000F01 /* GroqProvider.swift */; };
 		CPL00001000000000000B01 /* CopilotProvider.swift in Sources */ = {isa = PBXBuildFile; fileRef = CPL00002000000000000F01 /* CopilotProvider.swift */; };
 		CPL00003000000000000B01 /* CopilotOAuth.swift in Sources */ = {isa = PBXBuildFile; fileRef = CPL00004000000000000F01 /* CopilotOAuth.swift */; };
@@ -352,6 +353,7 @@
 		DGP00002000000000000F01 /* DeepgramProvider.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BirdNion/Providers/DeepgramProvider.swift; sourceTree = "<group>"; };
 		DVP00002000000000000F01 /* DevinProvider.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BirdNion/Providers/DevinProvider.swift; sourceTree = "<group>"; };
 		DVP00004000000000000F01 /* DevinCostScanner.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BirdNion/Providers/DevinCostScanner.swift; sourceTree = "<group>"; };
+		DVP00006000000000000F01 /* DevinCLIStatusFetcher.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BirdNion/Providers/DevinCLIStatusFetcher.swift; sourceTree = "<group>"; };
 		GRP00002000000000000F01 /* GroqProvider.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BirdNion/Providers/GroqProvider.swift; sourceTree = "<group>"; };
 		CPL00002000000000000F01 /* CopilotProvider.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BirdNion/Providers/CopilotProvider.swift; sourceTree = "<group>"; };
 		CPL00004000000000000F01 /* CopilotOAuth.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BirdNion/Providers/Copilot/CopilotOAuth.swift; sourceTree = "<group>"; };
@@ -1030,6 +1032,7 @@
 				DGP00001000000000000B01 /* DeepgramProvider.swift in Sources */,
 				DVP00001000000000000B01 /* DevinProvider.swift in Sources */,
 				DVP00003000000000000B01 /* DevinCostScanner.swift in Sources */,
+				DVP00005000000000000B01 /* DevinCLIStatusFetcher.swift in Sources */,
 				GRP00001000000000000B01 /* GroqProvider.swift in Sources */,
 				CPL00001000000000000B01 /* CopilotProvider.swift in Sources */,
 				CPL00003000000000000B01 /* CopilotOAuth.swift in Sources */,
@@ -1264,7 +1267,7 @@
 					"@executable_path/../Frameworks",
 				);
 				MACOSX_DEPLOYMENT_TARGET = 14.0;
-				MARKETING_VERSION = 0.10.63;
+				MARKETING_VERSION = 0.10.64;
 				PRODUCT_BUNDLE_IDENTIFIER = "com.local.birdnion";
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SWIFT_EMIT_LOC_STRINGS = YES;
@@ -1291,7 +1294,7 @@
 					"@executable_path/../Frameworks",
 				);
 				MACOSX_DEPLOYMENT_TARGET = 14.0;
-				MARKETING_VERSION = 0.10.63;
+				MARKETING_VERSION = 0.10.64;
 				PRODUCT_BUNDLE_IDENTIFIER = "com.local.birdnion";
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SWIFT_EMIT_LOC_STRINGS = YES;
@@ -1387,7 +1390,7 @@
 					"@executable_path/../../Frameworks",
 				);
 				MACOSX_DEPLOYMENT_TARGET = 14.0;
-				MARKETING_VERSION = 0.10.63;
+				MARKETING_VERSION = 0.10.64;
 				PRODUCT_BUNDLE_IDENTIFIER = "com.local.birdnion.BirdNionWidget";
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SKIP_INSTALL = YES;
@@ -1411,7 +1414,7 @@
 					"@executable_path/../../Frameworks",
 				);
 				MACOSX_DEPLOYMENT_TARGET = 14.0;
-				MARKETING_VERSION = 0.10.63;
+				MARKETING_VERSION = 0.10.64;
 				PRODUCT_BUNDLE_IDENTIFIER = "com.local.birdnion.BirdNionWidget";
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SKIP_INSTALL = YES;
